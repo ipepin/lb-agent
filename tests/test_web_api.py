@@ -705,6 +705,26 @@ class TestWebApi(unittest.TestCase):
         self.assertEqual(item["estimated_hours"], 3.0)
         self.assertEqual(item["worker_ids"], [worker_id])
 
+        done_response = self.client.put(
+            f"/api/tasks/{task_id}",
+            json={
+                "title": "Upraveny ukol",
+                "description": "Novy popis",
+                "priority": "high",
+                "status": "done",
+                "due_date": "2026-04-25T08:30",
+                "project_id": project_id,
+                "assigned_worker_id": worker_id,
+                "assigned_worker_ids": [worker_id],
+                "estimated_hours": 3,
+            },
+        )
+        self.assertEqual(done_response.status_code, 200)
+        done_item = done_response.json()["item"]
+        self.assertEqual(done_item["status"], "done")
+        self.assertIsNotNone(done_item["completed_at"])
+        self.assertEqual(done_item["completed_by"]["full_name"], "Pepa")
+
     def test_worklog_payment_summary_and_mark_paid(self) -> None:
         worker_response = self.client.post(
             "/api/workers",

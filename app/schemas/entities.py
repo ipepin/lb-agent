@@ -60,6 +60,7 @@ class Task:
     assigned_worker_id: int | None = None
     estimated_hours: float | None = None
     completed_at: str | None = None
+    completed_by_user_id: int | None = None
 
 
 @dataclass(slots=True)

@@ -64,6 +64,7 @@ class TaskService:
         assigned_worker_id: int | None = None,
         assigned_worker_ids: list[int] | None = None,
         estimated_hours: float | None = None,
+        completed_by_user_id: int | None = None,
     ) -> bool:
         normalized_worker_ids = list(dict.fromkeys(assigned_worker_ids or []))
         if assigned_worker_id is not None and assigned_worker_id not in normalized_worker_ids:
@@ -81,6 +82,7 @@ class TaskService:
             project_id=project_id,
             assigned_worker_id=primary_worker_id,
             estimated_hours=estimated_hours,
+            completed_by_user_id=completed_by_user_id,
         )
         if not updated:
             return False
@@ -91,8 +93,8 @@ class TaskService:
         )
         return True
 
-    def complete_task(self, task_id: int) -> bool:
-        return crud.update_task_status(self.config, task_id, "done")
+    def complete_task(self, task_id: int, completed_by_user_id: int | None = None) -> bool:
+        return crud.update_task_status(self.config, task_id, "done", completed_by_user_id=completed_by_user_id)
 
     def archive_task(self, task_id: int) -> bool:
         return crud.update_task_status(self.config, task_id, "archived")

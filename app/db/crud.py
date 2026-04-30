@@ -42,9 +42,9 @@ def create_task(config: AppConfig, task: Task) -> int:
             """
             INSERT INTO tasks (
                 title, description, priority, status, due_date, source_email_id, project_id,
-                assigned_worker_id, estimated_hours, completed_at, created_at
+                assigned_worker_id, estimated_hours, completed_at, completed_by_user_id, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task.title,
@@ -57,6 +57,7 @@ def create_task(config: AppConfig, task: Task) -> int:
                 task.assigned_worker_id,
                 task.estimated_hours,
                 task.completed_at,
+                task.completed_by_user_id,
                 utc_now_iso(),
             ),
         )
@@ -105,7 +106,7 @@ def list_tasks(config: AppConfig) -> Sequence[TaskModel]:
         rows = connection.execute(
             """
             SELECT id, title, description, priority, status, due_date, source_email_id,
-                   project_id, assigned_worker_id, estimated_hours, completed_at, created_at
+                   project_id, assigned_worker_id, estimated_hours, completed_at, completed_by_user_id, created_at
             FROM tasks
             ORDER BY created_at DESC
             """
@@ -130,6 +131,7 @@ def list_tasks(config: AppConfig) -> Sequence[TaskModel]:
             ),
             estimated_hours=row["estimated_hours"],
             completed_at=row["completed_at"],
+            completed_by_user_id=row["completed_by_user_id"],
             created_at=row["created_at"],
         )
         for row in rows
@@ -649,13 +651,24 @@ def update_task(
     project_id: int | None,
     assigned_worker_id: int | None,
     estimated_hours: float | None,
+    completed_by_user_id: int | None = None,
 ) -> bool:
     with get_connection(config.db_path) as connection:
         cursor = connection.execute(
             """
             UPDATE tasks
             SET title = ?, description = ?, priority = ?, status = ?, due_date = ?, project_id = ?,
-                assigned_worker_id = ?, estimated_hours = ?
+                assigned_worker_id = ?, estimated_hours = ?,
+                completed_at = CASE
+                    WHEN ? = 'done' THEN ?
+                    WHEN ? IN ('pending', 'waiting', 'planned', 'in_progress', 'scheduled') THEN NULL
+                    ELSE completed_at
+                END,
+                completed_by_user_id = CASE
+                    WHEN ? = 'done' THEN ?
+                    WHEN ? IN ('pending', 'waiting', 'planned', 'in_progress', 'scheduled') THEN NULL
+                    ELSE completed_by_user_id
+                END
             WHERE id = ?
             """,
             (
@@ -667,6 +680,12 @@ def update_task(
                 project_id,
                 assigned_worker_id,
                 estimated_hours,
+                status,
+                utc_now_iso(),
+                status,
+                status,
+                completed_by_user_id,
+                status,
                 task_id,
             ),
         )
@@ -674,15 +693,39 @@ def update_task(
         return cursor.rowcount > 0
 
 
-def update_task_status(config: AppConfig, task_id: int, status: str) -> bool:
+def update_task_status(
+    config: AppConfig,
+    task_id: int,
+    status: str,
+    completed_by_user_id: int | None = None,
+) -> bool:
     with get_connection(config.db_path) as connection:
         cursor = connection.execute(
             """
             UPDATE tasks
-            SET status = ?, completed_at = CASE WHEN ? = 'done' THEN ? ELSE completed_at END
+            SET status = ?,
+                completed_at = CASE
+                    WHEN ? = 'done' THEN ?
+                    WHEN ? IN ('pending', 'waiting', 'planned', 'in_progress', 'scheduled') THEN NULL
+                    ELSE completed_at
+                END,
+                completed_by_user_id = CASE
+                    WHEN ? = 'done' THEN ?
+                    WHEN ? IN ('pending', 'waiting', 'planned', 'in_progress', 'scheduled') THEN NULL
+                    ELSE completed_by_user_id
+                END
             WHERE id = ?
             """,
-            (status, status, utc_now_iso(), task_id),
+            (
+                status,
+                status,
+                utc_now_iso(),
+                status,
+                status,
+                completed_by_user_id,
+                status,
+                task_id,
+            ),
         )
         connection.commit()
         return cursor.rowcount > 0

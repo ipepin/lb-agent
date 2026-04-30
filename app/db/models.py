@@ -18,6 +18,7 @@ class TaskModel:
     worker_ids: list[int]
     estimated_hours: float | None
     completed_at: str | None
+    completed_by_user_id: int | None
     created_at: str
 
 

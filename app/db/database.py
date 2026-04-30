@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     assigned_worker_id INTEGER,
     estimated_hours REAL,
     completed_at TEXT,
+    completed_by_user_id INTEGER,
     created_at TEXT NOT NULL
 );
 """
@@ -360,6 +361,7 @@ def initialize_database(config: AppConfig) -> None:
         _ensure_column(connection, "tasks", "assigned_worker_id", "INTEGER")
         _ensure_column(connection, "tasks", "estimated_hours", "REAL")
         _ensure_column(connection, "tasks", "completed_at", "TEXT")
+        _ensure_column(connection, "tasks", "completed_by_user_id", "INTEGER")
         _ensure_column(connection, "emails", "project_id", "INTEGER")
         _ensure_column(
             connection,

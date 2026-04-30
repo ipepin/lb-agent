@@ -656,6 +656,13 @@ a {
   color: #fff;
 }
 
+.calendar-event-pill.completed,
+.chip.priority.completed,
+.calendar-upcoming-item.completed {
+  background: linear-gradient(135deg, #7c8799 0%, #98a3b3 100%);
+  color: #f8fafc;
+}
+
 .calendar-day-more {
   color: var(--muted);
   font-size: 0.65rem;
@@ -685,6 +692,11 @@ a {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.calendar-agenda-item.completed {
+  border-color: #cbd5e1;
+  background: linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
 }
 
 .calendar-agenda-item.low {

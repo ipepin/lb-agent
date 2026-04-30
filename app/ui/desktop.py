@@ -934,7 +934,7 @@ class DesktopApp:
             self.project_tree.delete(item_id)
 
         for project in projects:
-            emails, tasks, invoices, _ = self.project_service.get_project_summary(project.id)
+            emails, tasks, invoices, _, _ = self.project_service.get_project_summary(project.id)
             self.project_tree.insert(
                 "",
                 END,
@@ -1309,7 +1309,7 @@ class DesktopApp:
             self._set_text(self.project_email_detail, "Zakazka nebyla nalezena.")
             return
 
-        emails, tasks, invoices, work_logs = self.project_service.get_project_summary(project.id)
+        emails, tasks, invoices, work_logs, _ = self.project_service.get_project_summary(project.id)
         finance = self.project_service.get_project_finance_summary(project.id)
         task_lines = [f"- {task.title}" for task in tasks[:8]] or ["- zadne"]
         invoice_lines = [f"- {invoice.invoice_number or invoice.supplier}" for invoice in invoices[:8]] or [

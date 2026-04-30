@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
@@ -202,6 +202,7 @@ def _serialize_task(config: AppConfig, item: Any) -> dict[str, Any]:
             workers.append({"id": worker.id, "full_name": worker.full_name, "email": worker.email})
     source_email = crud.get_email(config, item.source_email_id) if item.source_email_id else None
     project = crud.get_project(config, item.project_id) if item.project_id is not None else None
+    completed_by_user = crud.get_user(config, int(item.completed_by_user_id)) if item.completed_by_user_id is not None else None
     calendar_events = [
         event
         for event in crud.list_calendar_events(config)
@@ -225,7 +226,7 @@ def _serialize_task(config: AppConfig, item: Any) -> dict[str, Any]:
         {
             "at": item.created_at,
             "kind": "task",
-            "title": "Úkol vytvořen",
+            "title": "Ăškol vytvoĹ™en",
             "details": item.title,
         }
     ]
@@ -234,7 +235,7 @@ def _serialize_task(config: AppConfig, item: Any) -> dict[str, Any]:
             {
                 "at": source_email.received_at,
                 "kind": "email",
-                "title": "Zdrojový e-mail",
+                "title": "ZdrojovĂ˝ e-mail",
                 "details": source_email.subject,
             }
         )
@@ -243,7 +244,7 @@ def _serialize_task(config: AppConfig, item: Any) -> dict[str, Any]:
             {
                 "at": item.due_date,
                 "kind": "deadline",
-                "title": "Termín úkolu",
+                "title": "TermĂ­n Ăşkolu",
                 "details": item.due_date,
             }
         )
@@ -252,8 +253,8 @@ def _serialize_task(config: AppConfig, item: Any) -> dict[str, Any]:
             {
                 "at": item.completed_at,
                 "kind": "status",
-                "title": "Úkol dokončen",
-                "details": "Stav: done",
+                "title": "Ăškol dokonÄŤen",
+                "details": f"DokonÄŤil: {completed_by_user.full_name}" if completed_by_user is not None else "Stav: done",
             }
         )
     for event in calendar_events:
@@ -261,7 +262,7 @@ def _serialize_task(config: AppConfig, item: Any) -> dict[str, Any]:
             {
                 "at": event.created_at,
                 "kind": "calendar",
-                "title": "Zápis do kalendáře" if event.external_event_id else "Lokální kalendářový návrh",
+                "title": "ZĂˇpis do kalendĂˇĹ™e" if event.external_event_id else "LokĂˇlnĂ­ kalendĂˇĹ™ovĂ˝ nĂˇvrh",
                 "details": event.title,
             }
         )
@@ -279,6 +280,15 @@ def _serialize_task(config: AppConfig, item: Any) -> dict[str, Any]:
             "received_at": source_email.received_at,
         }
         if source_email is not None
+        else None
+    )
+    payload["completed_by"] = (
+        {
+            "id": completed_by_user.id,
+            "full_name": completed_by_user.full_name,
+            "role": completed_by_user.role,
+        }
+        if completed_by_user is not None
         else None
     )
     payload["calendar_events"] = calendar_events_payload
@@ -382,11 +392,11 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     def current_user(request: Request) -> UserModel:
         user_id = request.session.get("user_id")
         if not user_id:
-            raise HTTPException(status_code=401, detail="Přihlášení vypršelo nebo neexistuje.")
+            raise HTTPException(status_code=401, detail="PĹ™ihlĂˇĹˇenĂ­ vyprĹˇelo nebo neexistuje.")
         user = crud.get_user(active_config, int(user_id))
         if user is None or user.status != "active":
             request.session.clear()
-            raise HTTPException(status_code=401, detail="Uživatel není dostupný.")
+            raise HTTPException(status_code=401, detail="UĹľivatel nenĂ­ dostupnĂ˝.")
         return user
 
     def require_roles(request: Request, *roles: str) -> UserModel:
@@ -458,7 +468,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     def login(payload: LoginPayload, request: Request) -> dict[str, object]:
         user = auth_service.authenticate(payload.login, payload.password)
         if user is None:
-            raise HTTPException(status_code=401, detail="Neplatný e-mail nebo heslo.")
+            raise HTTPException(status_code=401, detail="NeplatnĂ˝ e-mail nebo heslo.")
         request.session["user_id"] = user.id
         return {"item": _serialize_user(active_config, user)}
 
@@ -528,7 +538,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             password_hash=hash_password(payload.password) if payload.password else None,
         )
         if not updated:
-            raise HTTPException(status_code=404, detail="Uživatel nebyl nalezen.")
+            raise HTTPException(status_code=404, detail="UĹľivatel nebyl nalezen.")
         user = crud.get_user(active_config, user_id)
         return {"item": _serialize_user(active_config, user) if user is not None else None}
 
@@ -658,7 +668,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         if payload.project_id is not None:
             project = project_service.get_project(payload.project_id)
             if project is None:
-                raise HTTPException(status_code=404, detail="Zakázka nebyla nalezena.")
+                raise HTTPException(status_code=404, detail="ZakĂˇzka nebyla nalezena.")
 
         task_id = task_service.create_task(
             title=payload.title,
@@ -677,11 +687,11 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
     @app.put("/api/tasks/{task_id}")
     def update_task(task_id: int, payload: TaskCreatePayload, request: Request) -> dict[str, object]:
-        require_roles(request, ROLE_OWNER, ROLE_ADMIN)
+        user = require_roles(request, ROLE_OWNER, ROLE_ADMIN)
         if payload.project_id is not None:
             project = project_service.get_project(payload.project_id)
             if project is None:
-                raise HTTPException(status_code=404, detail="Zakázka nebyla nalezena.")
+                raise HTTPException(status_code=404, detail="ZakĂˇzka nebyla nalezena.")
 
         updated = task_service.update_task(
             task_id,
@@ -694,9 +704,10 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             assigned_worker_id=payload.assigned_worker_id,
             assigned_worker_ids=payload.assigned_worker_ids,
             estimated_hours=payload.estimated_hours,
+            completed_by_user_id=user.id if payload.status == "done" else None,
         )
         if not updated:
-            raise HTTPException(status_code=404, detail="Úkol nebyl nalezen.")
+            raise HTTPException(status_code=404, detail="Ăškol nebyl nalezen.")
         task = next((item for item in task_service.list_tasks() if item.id == task_id), None)
         return {"item": _serialize_task(active_config, task) if task else None}
 
@@ -707,17 +718,17 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         if email is None:
             raise HTTPException(status_code=404, detail="E-mail nebyl nalezen.")
         if attachment_index < 0 or attachment_index >= len(email.attachments):
-            raise HTTPException(status_code=404, detail="Příloha nebyla nalezena.")
+            raise HTTPException(status_code=404, detail="PĹ™Ă­loha nebyla nalezena.")
 
         attachment_path = Path(email.attachments[attachment_index]).resolve()
         attachments_dir = active_config.attachments_dir.resolve()
         try:
             attachment_path.relative_to(attachments_dir)
         except ValueError as exc:
-            raise HTTPException(status_code=403, detail="Přístup k příloze není povolen.") from exc
+            raise HTTPException(status_code=403, detail="PĹ™Ă­stup k pĹ™Ă­loze nenĂ­ povolen.") from exc
 
         if not attachment_path.exists():
-            raise HTTPException(status_code=404, detail="Soubor přílohy neexistuje.")
+            raise HTTPException(status_code=404, detail="Soubor pĹ™Ă­lohy neexistuje.")
 
         return FileResponse(attachment_path)
 
@@ -741,7 +752,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             if payload.project_id is not None:
                 project = project_service.get_project(payload.project_id)
                 if project is None:
-                    raise HTTPException(status_code=404, detail="Zakázka nebyla nalezena.")
+                    raise HTTPException(status_code=404, detail="ZakĂˇzka nebyla nalezena.")
             task_id = task_service.create_task(
                 title=(payload.title or "").strip() or email.subject,
                 description=(payload.description or "").strip() or parsed.summary or email.body[:500],
@@ -785,10 +796,10 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
         if action == "assign_project":
             if payload.project_id is None:
-                raise HTTPException(status_code=400, detail="Chybí project_id pro přiřazení.")
+                raise HTTPException(status_code=400, detail="ChybĂ­ project_id pro pĹ™iĹ™azenĂ­.")
             project = project_service.get_project(payload.project_id)
             if project is None:
-                raise HTTPException(status_code=404, detail="Zakázka nebyla nalezena.")
+                raise HTTPException(status_code=404, detail="ZakĂˇzka nebyla nalezena.")
             created_link = project_service.assign_email(email.id, payload.project_id)
             if created_link:
                 project_document_service.import_email_attachments(
@@ -872,7 +883,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             )
             parsed = parser_service.parse_message(email, classification)
             if not parsed.requested_deadline:
-                raise HTTPException(status_code=400, detail="V e-mailu nebyl nalezen termín.")
+                raise HTTPException(status_code=400, detail="V e-mailu nebyl nalezen termĂ­n.")
             event_id = calendar_service.create_event_proposal(
                 title=email.subject,
                 starts_at=parsed.requested_deadline,
@@ -895,7 +906,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 "external_event_id": stored_event.external_event_id if stored_event else "",
             }
 
-        raise HTTPException(status_code=400, detail="Neznámá akce pro e-mail.")
+        raise HTTPException(status_code=400, detail="NeznĂˇmĂˇ akce pro e-mail.")
 
     @app.post("/api/emails/{email_id}/action")
     def apply_email_action(email_id: str, payload: EmailActionPayload, request: Request) -> dict[str, object]:
@@ -906,7 +917,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     def apply_bulk_email_action(payload: BulkEmailActionPayload, request: Request) -> dict[str, object]:
         require_roles(request, ROLE_OWNER, ROLE_ADMIN)
         if not payload.email_ids:
-            raise HTTPException(status_code=400, detail="Nebyl vybrán žádný e-mail.")
+            raise HTTPException(status_code=400, detail="Nebyl vybrĂˇn ĹľĂˇdnĂ˝ e-mail.")
 
         result_items = [
             _apply_email_action(
@@ -920,12 +931,14 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     @app.post("/api/tasks/{task_id}/action")
     def apply_task_action(task_id: int, payload: TaskActionPayload, request: Request) -> dict[str, object]:
         user = current_user(request)
+        if user.role not in {ROLE_OWNER, ROLE_ADMIN}:
+            raise HTTPException(status_code=403, detail="Na tuto akci nemáš oprávnění.")
         task = next((item for item in task_service.list_tasks() if item.id == task_id), None)
         if task is None:
-            raise HTTPException(status_code=404, detail="Úkol nebyl nalezen.")
+            raise HTTPException(status_code=404, detail="Ăškol nebyl nalezen.")
 
         if payload.action == "complete":
-            task_service.complete_task(task_id)
+            task_service.complete_task(task_id, completed_by_user_id=user.id)
             return {"status": "ok", "action": payload.action}
 
         if payload.action == "archive":
@@ -938,16 +951,16 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
         if payload.action == "assign_project":
             if payload.project_id is None:
-                raise HTTPException(status_code=400, detail="Chybí project_id pro přiřazení.")
+                raise HTTPException(status_code=400, detail="ChybĂ­ project_id pro pĹ™iĹ™azenĂ­.")
             project = project_service.get_project(payload.project_id)
             if project is None:
-                raise HTTPException(status_code=404, detail="Zakázka nebyla nalezena.")
+                raise HTTPException(status_code=404, detail="ZakĂˇzka nebyla nalezena.")
             project_service.assign_task(task_id, payload.project_id)
             return {"status": "ok", "action": payload.action, "project_id": payload.project_id}
 
         if payload.action == "create_calendar_event":
             if not task.due_date:
-                raise HTTPException(status_code=400, detail="Úkol nemá zadaný termín.")
+                raise HTTPException(status_code=400, detail="Ăškol nemĂˇ zadanĂ˝ termĂ­n.")
             project = (
                 project_service.get_project(task.project_id)
                 if task.project_id is not None
@@ -994,13 +1007,13 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 "invited_workers": len(attendee_emails),
             }
 
-        raise HTTPException(status_code=400, detail="Neznámá akce pro úkol.")
+        raise HTTPException(status_code=400, detail="NeznĂˇmĂˇ akce pro Ăşkol.")
 
     @app.post("/api/tasks/bulk-action")
     def apply_bulk_task_action(payload: BulkTaskActionPayload, request: Request) -> dict[str, object]:
         require_roles(request, ROLE_OWNER, ROLE_ADMIN)
         if not payload.task_ids:
-            raise HTTPException(status_code=400, detail="Nebyl vybrán žádný úkol.")
+            raise HTTPException(status_code=400, detail="Nebyl vybrĂˇn ĹľĂˇdnĂ˝ Ăşkol.")
 
         result_items = [
             apply_task_action(
@@ -1029,7 +1042,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         require_roles(request, ROLE_OWNER, ROLE_ADMIN)
         deleted = task_service.delete_task(task_id)
         if not deleted:
-            raise HTTPException(status_code=404, detail="Úkol nebyl nalezen.")
+            raise HTTPException(status_code=404, detail="Ăškol nebyl nalezen.")
         return {"status": "ok"}
 
     @app.post("/api/tasks/{task_id}/delete")
@@ -1053,7 +1066,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         user = current_user(request)
         project = project_service.get_project(project_id)
         if project is None:
-            raise HTTPException(status_code=404, detail="Zakázka nebyla nalezena.")
+            raise HTTPException(status_code=404, detail="ZakĂˇzka nebyla nalezena.")
 
         emails, tasks, invoices, work_logs, timeline_events = project_service.get_project_summary(project_id)
         return {
@@ -1075,7 +1088,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         require_roles(request, ROLE_OWNER, ROLE_ADMIN)
         updated = project_service.update_project(project_id, **payload.model_dump())
         if not updated:
-            raise HTTPException(status_code=404, detail="Zakázka nebyla nalezena.")
+            raise HTTPException(status_code=404, detail="ZakĂˇzka nebyla nalezena.")
 
         project = project_service.get_project(project_id)
         return {"item": asdict(project) if project else None}
@@ -1085,7 +1098,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         require_roles(request, ROLE_OWNER)
         project = project_service.get_project(project_id)
         if project is None:
-            raise HTTPException(status_code=404, detail="Zakázka nebyla nalezena.")
+            raise HTTPException(status_code=404, detail="ZakĂˇzka nebyla nalezena.")
         project_document_service.delete_documents_for_project(project_id)
         project_service.delete_project(project_id)
         return {"status": "ok"}
@@ -1103,7 +1116,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         require_roles(request, ROLE_OWNER, ROLE_ADMIN)
         project = project_service.get_project(project_id)
         if project is None:
-            raise HTTPException(status_code=404, detail="Zakázka nebyla nalezena.")
+            raise HTTPException(status_code=404, detail="ZakĂˇzka nebyla nalezena.")
 
         task_id = task_service.create_task(
             title=payload.title,
@@ -1136,7 +1149,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         require_roles(request, ROLE_OWNER, ROLE_ADMIN)
         updated = worker_service.update_worker(worker_id, **payload.model_dump())
         if not updated:
-            raise HTTPException(status_code=404, detail="Pracovník nebyl nalezen.")
+            raise HTTPException(status_code=404, detail="PracovnĂ­k nebyl nalezen.")
         worker = worker_service.get_worker(worker_id)
         return {"item": asdict(worker) if worker else None}
 
@@ -1145,7 +1158,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         require_roles(request, ROLE_OWNER)
         deleted = worker_service.delete_worker(worker_id)
         if not deleted:
-            raise HTTPException(status_code=404, detail="Pracovník nebyl nalezen.")
+            raise HTTPException(status_code=404, detail="PracovnĂ­k nebyl nalezen.")
         return {"status": "ok"}
 
     @app.post("/api/workers/{worker_id}/delete")
@@ -1193,7 +1206,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         require_roles(request, ROLE_OWNER, ROLE_ADMIN)
         updated = worklog_service.set_payment_status(work_log_id, is_paid=payload.is_paid)
         if not updated:
-            raise HTTPException(status_code=404, detail="Výkaz práce nebyl nalezen.")
+            raise HTTPException(status_code=404, detail="VĂ˝kaz prĂˇce nebyl nalezen.")
 
         item = next((entry for entry in worklog_service.list_work_logs() if entry.id == work_log_id), None)
         return {"item": asdict(item) if item else None}
@@ -1210,7 +1223,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             is_paid=payload.is_paid,
         )
         if updated_count <= 0:
-            raise HTTPException(status_code=404, detail="Pro tuto zakázku a pracovníka nebyly nalezeny žádné výkazy.")
+            raise HTTPException(status_code=404, detail="Pro tuto zakĂˇzku a pracovnĂ­ka nebyly nalezeny ĹľĂˇdnĂ© vĂ˝kazy.")
         return {"status": "ok", "updated_count": updated_count}
 
     @app.delete("/api/worklogs/{work_log_id}")
@@ -1218,7 +1231,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         require_roles(request, ROLE_OWNER, ROLE_ADMIN)
         deleted = worklog_service.delete_work_log(work_log_id)
         if not deleted:
-            raise HTTPException(status_code=404, detail="Výkaz práce nebyl nalezen.")
+            raise HTTPException(status_code=404, detail="VĂ˝kaz prĂˇce nebyl nalezen.")
         return {"status": "ok"}
 
     @app.post("/api/worklogs/{work_log_id}/delete")
@@ -1265,7 +1278,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         effective_worker_id = worker_id
         if user.role == ROLE_WORKER:
             if user.worker_id is None:
-                raise HTTPException(status_code=403, detail="Pracovník není navázaný na účet.")
+                raise HTTPException(status_code=403, detail="PracovnĂ­k nenĂ­ navĂˇzanĂ˝ na ĂşÄŤet.")
             effective_worker_id = user.worker_id
         content = await file.read()
         document_id = project_document_service.save_document(
@@ -1294,3 +1307,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         return FileResponse(file_path)
 
     return app
+
+
+
+
+
+

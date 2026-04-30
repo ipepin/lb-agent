@@ -132,68 +132,68 @@ let projectAutosaveTimer = null;
 const BROKEN_CZECH_REPLACEMENTS = [
   ["Â·", "·"],
   ["â€¦", "…"],
-  ["Ã¡", "á"],
-  ["Ã", "Á"],
+  ["A!", "á"],
+  ["A", "Á"],
   ["Ăˇ", "á"],
   ["Ă", "Á"],
-  ["Ã©", "é"],
-  ["Ã‰", "É"],
+  ["A©", "é"],
+  ["A‰", "É"],
   ["Ă©", "é"],
   ["Ă‰", "É"],
-  ["Ã­", "í"],
-  ["Ã", "Í"],
+  ["A­", "í"],
+  ["A?", "Í"],
   ["Ă­", "í"],
-  ["Ă", "Í"],
-  ["Ã³", "ó"],
-  ["Ã“", "Ó"],
+  ["Ă?", "Í"],
+  ["A3", "ó"],
+  ["A“", "Ó"],
   ["Ăł", "ó"],
   ["Ă“", "Ó"],
-  ["Ãº", "ú"],
-  ["Ãš", "Ú"],
+  ["Ao", "ú"],
+  ["Aš", "Ú"],
   ["Ăş", "ú"],
   ["Ăš", "Ú"],
-  ["Ã½", "ý"],
-  ["Ã", "Ý"],
+  ["A1", "ý"],
+  ["A?", "Ý"],
   ["Ă˝", "ý"],
-  ["Ă", "Ý"],
+  ["Ă?", "Ý"],
   ["Ä›", "ě"],
-  ["Ä", "ě"],
-  ["Ä", "Ě"],
+  ["Ä?", "ě"],
+  ["Ä?", "Ě"],
   ["ÄŤ", "č"],
-  ["Ä", "č"],
+  ["Ä?", "č"],
   ["ÄŚ", "Č"],
-  ["ÄŒ", "Č"],
-  ["Ä", "ď"],
-  ["Ä", "Ď"],
+  ["ÄO", "Č"],
+  ["Ä?", "ď"],
+  ["Ä?", "Ď"],
   ["Ĺ™", "ř"],
   ["Ĺ", "Ř"],
-  ["Å™", "ř"],
-  ["Å", "Ř"],
+  ["A™", "ř"],
+  ["A", "Ř"],
   ["Ĺž", "ž"],
   ["Ĺ˝", "Ž"],
-  ["Å¾", "ž"],
-  ["Å½", "Ž"],
-  ["Ĺ¡", "š"],
+  ["A3", "ž"],
+  ["A1", "Ž"],
+  ["Ĺ!", "š"],
   ["Ĺ ", "Š"],
-  ["Å¡", "š"],
-  ["Å ", "Š"],
+  ["A!", "š"],
+  ["A ", "Š"],
   ["ĹŻ", "ů"],
-  ["Ĺ¯", "ů"],
+  ["Ĺ—", "ů"],
   ["Ĺ®", "Ů"],
-  ["Å¯", "ů"],
-  ["Å®", "Ů"],
+  ["A—", "ů"],
+  ["A®", "Ů"],
   ["Ĺ", "ň"],
-  ["Ĺˆ", "Ň"],
-  ["Å", "ň"],
-  ["Å", "ň"],
+  ["Ĺ^", "Ň"],
+  ["A", "ň"],
+  ["A?", "ň"],
   ["PĹ™", "Př"],
   ["pĹ™", "př"],
-  ["PÅ™", "Př"],
-  ["pÅ™", "př"],
+  ["PA™", "Př"],
+  ["pA™", "př"],
   ["PĹŻ", "Pů"],
   ["pĹŻ", "pů"],
-  ["PÅ¯", "Pů"],
-  ["pÅ¯", "pů"],
+  ["PA—", "Pů"],
+  ["pA—", "pů"],
   ["DoplĹ", "Doplň"],
 ];
 
@@ -326,7 +326,7 @@ function showMessage(type, text) {
     info: "Informace",
   };
   const iconMap = {
-    ok: "✓",
+    ok: "?",
     error: "!",
     info: "i",
   };
@@ -414,6 +414,11 @@ function getPriorityClass(priority) {
   if (normalized === "high") return "high";
   if (normalized === "low") return "low";
   return "normal";
+}
+
+function getCalendarEventClass(event) {
+  if (event?.task_status === "done") return "completed";
+  return getPriorityClass(event?.priority);
 }
 
 function getPriorityColorLabel(priority) {
@@ -852,6 +857,8 @@ function getDashboardCalendarEvents() {
         workers: task.workers || [],
         external_event_id: event.external_event_id,
         attendee_emails: event.attendee_emails || [],
+        completed_at: task.completed_at,
+        completed_by: task.completed_by || null,
       });
     }
   }
@@ -930,7 +937,7 @@ function renderCalendarMonthGrid(monthKey, selectedDateKey) {
               </div>
               <div class="calendar-day-events">
                 ${visible.map((event) => `
-                  <span class="calendar-event-pill ${getPriorityClass(event.priority)} ${event.startKey !== event.endKey ? "is-range" : ""}" title="${escapeHtml(getCalendarFullLabel(event))}">
+                  <span class="calendar-event-pill ${getCalendarEventClass(event)} ${event.startKey !== event.endKey ? "is-range" : ""}" title="${escapeHtml(getCalendarFullLabel(event))}">
                     ${escapeHtml(getCalendarDisplayName(event, 24))}
                   </span>
                 `).join("")}
@@ -963,7 +970,7 @@ function renderCalendarWeekGrid(selectedDateKey) {
             </div>
             <div class="calendar-week-day-body">
               ${events.length ? events.map((event) => `
-                <span class="calendar-event-pill ${getPriorityClass(event.priority)} ${event.startKey !== event.endKey ? "is-range" : ""}" title="${escapeHtml(getCalendarFullLabel(event))}">
+                <span class="calendar-event-pill ${getCalendarEventClass(event)} ${event.startKey !== event.endKey ? "is-range" : ""}" title="${escapeHtml(getCalendarFullLabel(event))}">
                   ${escapeHtml(getCalendarDisplayName(event, 26))}
                 </span>
               `).join("") : `<span class="calendar-week-empty">Volno</span>`}
@@ -988,7 +995,7 @@ function renderCalendarAgenda(selectedDateKey) {
   return `
     <div class="calendar-agenda-list">
       ${events.map((event) => `
-        <article class="calendar-agenda-item ${getPriorityClass(event.priority)}">
+        <article class="calendar-agenda-item ${getCalendarEventClass(event)}">
           <div class="calendar-agenda-head">
             <div>
               <strong>${escapeHtml(getCalendarDisplayName(event, 46))}</strong>
@@ -997,12 +1004,18 @@ function renderCalendarAgenda(selectedDateKey) {
                 ${event.startKey !== event.endKey ? ` – ${escapeHtml(formatDate(event.ends_at))}` : ""}
               </div>
             </div>
-            <span class="chip priority ${getPriorityClass(event.priority)}">${escapeHtml(getPriorityColorLabel(event.priority))}</span>
+            <span class="chip priority ${getCalendarEventClass(event)}">${escapeHtml(getPriorityColorLabel(event.priority))}</span>
           </div>
           <div class="calendar-agenda-row">
             <span><strong>Stav:</strong> ${escapeHtml(getTaskStatusLabel(event.task_status))}</span>
             <span><strong>Kalendář:</strong> ${escapeHtml(event.external_event_id ? "Google Kalendář" : "Jen lokálně")}</span>
           </div>
+          ${event.task_status === "done" ? `
+            <div class="calendar-agenda-row">
+              <span><strong>Dokončil:</strong> ${escapeHtml(event.completed_by?.full_name || "-")}</span>
+              <span><strong>Dokončeno:</strong> ${escapeHtml(formatDate(event.completed_at, true))}</span>
+            </div>
+          ` : ""}
           <div class="calendar-agenda-row">
             <span><strong>Pracovníci:</strong> ${escapeHtml((event.workers || []).map((worker) => worker.full_name).join(", ") || "Bez přiřazení")}</span>
           </div>
@@ -1212,12 +1225,14 @@ function renderTaskDetail(task) {
           { label: "Zakázka", value: project?.name || "Bez zakázky" },
           { label: "Pracovníci", value: getTaskWorkerNames(task) },
           { label: "Kalendář", value: getTaskCalendarStatusLabel(latestCalendarEvent) },
+          { label: "Dokončil", value: task.completed_by?.full_name || "-" },
         ])}
         <div class="detail-grid">
           <div class="detail-item"><span class="detail-item-label">E-maily pro notifikaci</span><span class="detail-item-value">${escapeHtml(recipients.join(", ") || "-")}</span></div>
           <div class="detail-item"><span class="detail-item-label">Pozvaní do kalendáře</span><span class="detail-item-value">${escapeHtml(calendarInvitees)}</span></div>
           <div class="detail-item"><span class="detail-item-label">Poslední kalendářová událost</span><span class="detail-item-value">${latestCalendarEvent ?`${escapeHtml(latestCalendarEvent.title)} · ${formatDate(latestCalendarEvent.starts_at)}` : "-"}</span></div>
           <div class="detail-item"><span class="detail-item-label">Odhad hodin</span><span class="detail-item-value">${task.estimated_hours ?? "-"}</span></div>
+          <div class="detail-item"><span class="detail-item-label">Dokončeno</span><span class="detail-item-value">${task.completed_at ? formatDate(task.completed_at, true) : "-"}</span></div>
         </div>
         ${sourceEmail ?`
           <div class="section-card">
@@ -1558,13 +1573,13 @@ function renderDashboardView() {
                 <button type="button" class="button button-secondary ${state.calendarMode === "month" ? "is-active" : ""}" data-calendar-mode="month">Měsíc</button>
                 <button type="button" class="button button-secondary ${state.calendarMode === "week" ? "is-active" : ""}" data-calendar-mode="week">Týden</button>
               </div>
-              <button type="button" class="button button-secondary" data-calendar-nav="prev">←</button>
+              <button type="button" class="button button-secondary" data-calendar-nav="prev">‹</button>
               <strong class="calendar-month-label">${
                 state.calendarMode === "week"
                   ? `${escapeHtml(formatDate(getWeekStartKey(selectedDateKey), false))} – ${escapeHtml(formatDate(shiftDateKey(getWeekStartKey(selectedDateKey), 6), false))}`
                   : escapeHtml(formatMonthLabel(monthKey))
               }</strong>
-              <button type="button" class="button button-secondary" data-calendar-nav="next">→</button>
+              <button type="button" class="button button-secondary" data-calendar-nav="next">›</button>
               <button type="button" class="button button-primary" data-calendar-nav="today">Dnes</button>
             </div>
           </div>
@@ -1593,7 +1608,7 @@ function renderDashboardView() {
             <div class="panel-header"><div><h3>Nejbližší akce</h3><p>Co tě čeká v příštích dnech.</p></div></div>
             <div class="calendar-upcoming-list">
               ${upcomingEvents.length ? upcomingEvents.map((event) => `
-                <button type="button" class="calendar-upcoming-item ${getPriorityClass(event.priority)}" data-open-task="${event.task_id}" title="${escapeHtml(getCalendarFullLabel(event))}">
+                <button type="button" class="calendar-upcoming-item ${getCalendarEventClass(event)}" data-open-task="${event.task_id}" title="${escapeHtml(getCalendarFullLabel(event))}">
                   <strong>${escapeHtml(getCalendarDisplayName(event, 34))}</strong>
                   ${event.task_title ? `<small>${escapeHtml(truncateText(event.task_title, 30))}</small>` : ""}
                   <span>${escapeHtml(formatDate(event.starts_at))}</span>
@@ -3571,3 +3586,9 @@ async function boot() {
 }
 
 boot();
+
+
+
+
+
+
