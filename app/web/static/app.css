@@ -429,18 +429,28 @@ a {
 
 .dashboard-calendar-header {
   align-items: center;
+  flex-wrap: nowrap;
 }
 
 .calendar-nav {
   display: flex;
   align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.calendar-nav .button,
+.calendar-month-label {
+  flex: 0 0 auto;
 }
 
 .calendar-mode-toggle {
   display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
   padding: 4px;
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -1406,14 +1416,19 @@ a {
 
   .calendar-nav {
     justify-content: flex-start;
-  }
-
-  .calendar-mode-toggle {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
     width: 100%;
   }
 
+  .calendar-mode-toggle {
+    width: auto;
+    flex: 0 0 auto;
+  }
+
   .calendar-mode-toggle .button {
-    flex: 1;
+    flex: 0 0 auto;
   }
 }
 

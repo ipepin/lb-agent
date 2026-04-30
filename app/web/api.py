@@ -386,7 +386,14 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.add_middleware(SessionMiddleware, secret_key=active_config.auth_session_secret)
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=active_config.auth_session_secret,
+        session_cookie="lb_agent_session",
+        same_site="lax",
+        https_only=False,
+        max_age=60 * 60 * 24 * 30,
+    )
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
     def current_user(request: Request) -> UserModel:
