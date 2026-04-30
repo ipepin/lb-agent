@@ -1,0 +1,16 @@
+[Unit]
+Description=LB-AGENT worker
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/lb-agent/app
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/lb-agent/.venv/bin/python run_worker.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
