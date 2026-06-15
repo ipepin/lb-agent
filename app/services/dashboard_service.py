@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import Counter
+
 from app.config import AppConfig
 from app.db import crud
 
@@ -17,6 +19,7 @@ class DashboardService:
         projects = list(crud.list_projects(self.config))
         workers = list(crud.list_workers(self.config))
         work_logs = list(crud.list_work_logs(self.config))
+        triage_stats = self._build_triage_stats(emails)
 
         return {
             "counts": {
@@ -56,4 +59,41 @@ class DashboardService:
                 ),
                 "billable_total": round(sum(item.billable_amount or 0 for item in work_logs), 2),
             },
+            "triage": triage_stats,
+        }
+
+    def _build_triage_stats(self, emails: list[object]) -> dict[str, object]:
+        ai_emails = [item for item in emails if getattr(item, "ai_payload", None)]
+        decisions = [
+            getattr(item, "ai_payload", {}).get("user_decision") or {}
+            for item in ai_emails
+        ]
+        confirmed = [item for item in decisions if item.get("action")]
+        matched = [item for item in confirmed if item.get("matches_ai_suggestion") is True]
+        mismatched = [item for item in confirmed if item.get("matches_ai_suggestion") is False]
+        top_suggested_actions = Counter(
+            str((getattr(item, "ai_payload", {}).get("classification") or {}).get("action") or "").strip()
+            for item in ai_emails
+            if str((getattr(item, "ai_payload", {}).get("classification") or {}).get("action") or "").strip()
+        )
+        top_confirmed_actions = Counter(
+            str(item.get("action") or "").strip()
+            for item in confirmed
+            if str(item.get("action") or "").strip()
+        )
+
+        return {
+            "suggested_total": len(ai_emails),
+            "confirmed_total": len(confirmed),
+            "matched_total": len(matched),
+            "mismatched_total": len(mismatched),
+            "pending_review_total": max(len(ai_emails) - len(confirmed), 0),
+            "top_suggested_actions": [
+                {"action": action, "count": count}
+                for action, count in top_suggested_actions.most_common(4)
+            ],
+            "top_confirmed_actions": [
+                {"action": action, "count": count}
+                for action, count in top_confirmed_actions.most_common(4)
+            ],
         }

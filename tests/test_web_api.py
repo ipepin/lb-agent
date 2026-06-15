@@ -47,6 +47,23 @@ class TestWebApi(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_root_page_and_dashboard_endpoint(self) -> None:
+        crud.create_email(
+            self.config,
+            Email(
+                id="email-dashboard-ai",
+                thread_id="thread-dashboard-ai",
+                sender="client@example.com",
+                subject="AI dashboard",
+                body="Prosim pripravit ukol.",
+                received_at="2026-04-17T08:00:00+00:00",
+            ),
+            summary="Poptavka",
+            ai_payload={
+                "classification": {"action": "create_task"},
+                "user_decision": {"action": "create_task", "matches_ai_suggestion": True},
+            },
+        )
+
         root_response = self.client.get("/")
         dashboard_response = self.client.get("/api/dashboard")
         auth_response = self.client.get("/api/auth/me")
@@ -55,6 +72,8 @@ class TestWebApi(unittest.TestCase):
         self.assertIn('<div id="app"></div>', root_response.text)
         self.assertEqual(dashboard_response.status_code, 200)
         self.assertIn("counts", dashboard_response.json())
+        self.assertIn("triage", dashboard_response.json())
+        self.assertEqual(dashboard_response.json()["triage"]["suggested_total"], 1)
         self.assertEqual(auth_response.status_code, 200)
         self.assertEqual(auth_response.json()["item"]["role"], "owner")
 

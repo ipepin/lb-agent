@@ -1286,6 +1286,70 @@ function renderWorkerStatusOptions(selectedStatus = "active") {
     .join("");
 }
 
+function renderEmailAiProposal(email, { heading = "AI navrh", showEmailActions = true } = {}) {
+  const ai = getEmailAiSuggestion(email);
+  if (!Object.keys(ai).length) return "";
+
+  const classification = ai.classification || {};
+  const parsed = ai.parsed_email || {};
+  const userDecision = ai.user_decision || {};
+  const confirmedBy = userDecision.confirmed_by || {};
+  const aiCards = [
+    { label: "Doporucena akce", value: buildAiActionLabel(classification.action) },
+    { label: "Duvěra", value: classification.confidence != null ? `${Math.round(Number(classification.confidence || 0) * 100)} %` : "-" },
+    { label: "Priorita", value: getPriorityLabel(classification.priority || email.priority) },
+    { label: "Termin", value: parsed.requested_deadline ? formatDate(parsed.requested_deadline, true) : "-" },
+  ];
+  const aiSuggestedActions = Array.isArray(parsed.suggested_actions) ? parsed.suggested_actions.filter(Boolean) : [];
+  const aiActionButtons = [];
+  if (showEmailActions && classification.action === "create_task") {
+    aiActionButtons.push(`<button type="button" class="button button-primary" data-email-action="create_task" data-email-id="${escapeHtml(email.id)}">Potvrdit navrh ukolu</button>`);
+  }
+  if (showEmailActions && classification.action === "create_invoice") {
+    aiActionButtons.push(`<button type="button" class="button button-primary" data-email-action="create_invoice" data-email-id="${escapeHtml(email.id)}">Potvrdit navrh faktury</button>`);
+  }
+  if (showEmailActions && classification.action === "create_calendar_event") {
+    aiActionButtons.push(`<button type="button" class="button button-primary" data-email-action="create_calendar_event" data-email-id="${escapeHtml(email.id)}">Potvrdit navrh terminu</button>`);
+  }
+  if (classification.action === "draft_email_reply" && parsed.draft_reply) {
+    aiActionButtons.push(`<button type="button" class="button button-primary" data-ai-open-reply="${escapeHtml(email.id)}">Otevrit draft odpovedi</button>`);
+  }
+  if (parsed.draft_reply) {
+    aiActionButtons.push(`<button type="button" class="button button-secondary" data-ai-copy-reply="${escapeHtml(email.id)}">Kopirovat odpoved</button>`);
+  }
+
+  return `
+    <div class="section-card ai-proposal-card">
+      <div class="panel-header"><div><h4>${escapeHtml(heading)}</h4><p>${escapeHtml(parsed.summary || email.summary || "Navrh z automaticke triage e-mailu.")}</p></div></div>
+      ${renderSummaryStrip(aiCards)}
+      <div class="detail-grid ai-detail-grid">
+        <div class="detail-item"><span class="detail-item-label">Kategorie</span><span class="detail-item-value">${escapeHtml(getEmailCategoryLabel(classification.category || email.category))}</span></div>
+        <div class="detail-item"><span class="detail-item-label">Odpoved potreba</span><span class="detail-item-value">${classification.needs_reply ? "Ano" : "Ne"}</span></div>
+        <div class="detail-item"><span class="detail-item-label">Kontakt</span><span class="detail-item-value">${escapeHtml(parsed.contact || parsed.company_name || "-")}</span></div>
+        <div class="detail-item"><span class="detail-item-label">Adresa</span><span class="detail-item-value">${escapeHtml(parsed.address || "-")}</span></div>
+        <div class="detail-item"><span class="detail-item-label">Pozadovana cinnost</span><span class="detail-item-value">${escapeHtml(parsed.requested_action || "-")}</span></div>
+        <div class="detail-item"><span class="detail-item-label">Faktura</span><span class="detail-item-value">${escapeHtml(parsed.invoice_number || "-")}</span></div>
+      </div>
+      ${userDecision.action ? `
+        <div class="detail-grid ai-detail-grid">
+          <div class="detail-item"><span class="detail-item-label">Potvrzena akce</span><span class="detail-item-value">${escapeHtml(buildAiActionLabel(userDecision.action))}</span></div>
+          <div class="detail-item"><span class="detail-item-label">Potvrdil</span><span class="detail-item-value">${escapeHtml(confirmedBy.full_name || confirmedBy.email || "-")}</span></div>
+          <div class="detail-item"><span class="detail-item-label">Potvrzeno</span><span class="detail-item-value">${userDecision.confirmed_at ? formatDate(userDecision.confirmed_at, true) : "-"}</span></div>
+          <div class="detail-item"><span class="detail-item-label">Shoda s AI</span><span class="detail-item-value">${userDecision.matches_ai_suggestion === true ? "Ano" : userDecision.matches_ai_suggestion === false ? "Ne" : "-"}</span></div>
+        </div>
+      ` : ""}
+      ${aiSuggestedActions.length ? `<div class="toolbar">${aiSuggestedActions.map((item) => `<span class="chip">${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+      ${aiActionButtons.length ? `<div class="toolbar">${aiActionButtons.join("")}</div>` : ""}
+      ${parsed.draft_reply ? `
+        <div class="ai-inline-card">
+          <div class="panel-header"><div><h4>Navrh odpovedi</h4></div></div>
+          <pre class="text-block">${escapeHtml(parsed.draft_reply)}</pre>
+        </div>
+      ` : ""}
+    </div>
+  `;
+}
+
 function toDateTimeLocal(value) {
   if (!value) return "";
   const directMatch = String(value).trim().match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/);
@@ -1302,34 +1366,6 @@ function renderEmailDetail(email) {
   if (!email) return renderEmpty("Vyber e-mail ze seznamu.");
   const body = email.body ?? email.body_preview ?? "";
   const hasFullBody = typeof email.body === "string";
-  const ai = getEmailAiSuggestion(email);
-  const classification = ai.classification || {};
-  const parsed = ai.parsed_email || {};
-  const userDecision = ai.user_decision || {};
-  const confirmedBy = userDecision.confirmed_by || {};
-  const aiCards = [
-    { label: "Doporucena akce", value: buildAiActionLabel(classification.action) },
-    { label: "Duvěra", value: classification.confidence != null ? `${Math.round(Number(classification.confidence || 0) * 100)} %` : "-" },
-    { label: "Priorita", value: getPriorityLabel(classification.priority || email.priority) },
-    { label: "Termin", value: parsed.requested_deadline ? formatDate(parsed.requested_deadline, true) : "-" },
-  ];
-  const aiSuggestedActions = Array.isArray(parsed.suggested_actions) ? parsed.suggested_actions.filter(Boolean) : [];
-  const aiActionButtons = [];
-  if (classification.action === "create_task") {
-    aiActionButtons.push(`<button type="button" class="button button-primary" data-email-action="create_task" data-email-id="${escapeHtml(email.id)}">Potvrdit navrh ukolu</button>`);
-  }
-  if (classification.action === "create_invoice") {
-    aiActionButtons.push(`<button type="button" class="button button-primary" data-email-action="create_invoice" data-email-id="${escapeHtml(email.id)}">Potvrdit navrh faktury</button>`);
-  }
-  if (classification.action === "create_calendar_event") {
-    aiActionButtons.push(`<button type="button" class="button button-primary" data-email-action="create_calendar_event" data-email-id="${escapeHtml(email.id)}">Potvrdit navrh terminu</button>`);
-  }
-  if (classification.action === "draft_email_reply" && parsed.draft_reply) {
-    aiActionButtons.push(`<button type="button" class="button button-primary" data-ai-open-reply="${escapeHtml(email.id)}">Otevrit draft odpovedi</button>`);
-  }
-  if (parsed.draft_reply) {
-    aiActionButtons.push(`<button type="button" class="button button-secondary" data-ai-copy-reply="${escapeHtml(email.id)}">Kopirovat odpoved</button>`);
-  }
   const assignedProjects = email.projects?.length
     ?email.projects.map((project) => `<span class="chip">${escapeHtml(project.name)}</span>`).join("")
     : `<span class="selection-chip">Bez pĹ™iĹ™azenĂ© zakĂˇzky</span>`;
@@ -1372,36 +1408,7 @@ function renderEmailDetail(email) {
         <div class="detail-item"><span class="detail-item-label">Kategorie</span><span class="detail-item-value">${escapeHtml(getEmailCategoryLabel(email.category))}</span></div>
         <div class="detail-item"><span class="detail-item-label">ZakĂˇzek</span><span class="detail-item-value">${email.projects?.length || 0}</span></div>
       </div>
-      ${Object.keys(ai).length ? `
-        <div class="section-card ai-proposal-card">
-          <div class="panel-header"><div><h4>AI navrh</h4><p>${escapeHtml(parsed.summary || email.summary || "Navrh z automaticke triage e-mailu.")}</p></div></div>
-          ${renderSummaryStrip(aiCards)}
-          <div class="detail-grid ai-detail-grid">
-            <div class="detail-item"><span class="detail-item-label">Kategorie</span><span class="detail-item-value">${escapeHtml(getEmailCategoryLabel(classification.category || email.category))}</span></div>
-            <div class="detail-item"><span class="detail-item-label">Odpoved potreba</span><span class="detail-item-value">${classification.needs_reply ? "Ano" : "Ne"}</span></div>
-            <div class="detail-item"><span class="detail-item-label">Kontakt</span><span class="detail-item-value">${escapeHtml(parsed.contact || parsed.company_name || "-")}</span></div>
-            <div class="detail-item"><span class="detail-item-label">Adresa</span><span class="detail-item-value">${escapeHtml(parsed.address || "-")}</span></div>
-            <div class="detail-item"><span class="detail-item-label">Pozadovana cinnost</span><span class="detail-item-value">${escapeHtml(parsed.requested_action || "-")}</span></div>
-            <div class="detail-item"><span class="detail-item-label">Faktura</span><span class="detail-item-value">${escapeHtml(parsed.invoice_number || "-")}</span></div>
-          </div>
-          ${userDecision.action ? `
-            <div class="detail-grid ai-detail-grid">
-              <div class="detail-item"><span class="detail-item-label">Potvrzena akce</span><span class="detail-item-value">${escapeHtml(buildAiActionLabel(userDecision.action))}</span></div>
-              <div class="detail-item"><span class="detail-item-label">Potvrdil</span><span class="detail-item-value">${escapeHtml(confirmedBy.full_name || confirmedBy.email || "-")}</span></div>
-              <div class="detail-item"><span class="detail-item-label">Potvrzeno</span><span class="detail-item-value">${userDecision.confirmed_at ? formatDate(userDecision.confirmed_at, true) : "-"}</span></div>
-              <div class="detail-item"><span class="detail-item-label">Shoda s AI</span><span class="detail-item-value">${userDecision.matches_ai_suggestion === true ? "Ano" : userDecision.matches_ai_suggestion === false ? "Ne" : "-"}</span></div>
-            </div>
-          ` : ""}
-          ${aiSuggestedActions.length ? `<div class="toolbar">${aiSuggestedActions.map((item) => `<span class="chip">${escapeHtml(item)}</span>`).join("")}</div>` : ""}
-          ${aiActionButtons.length ? `<div class="toolbar">${aiActionButtons.join("")}</div>` : ""}
-          ${parsed.draft_reply ? `
-            <div class="ai-inline-card">
-              <div class="panel-header"><div><h4>Navrh odpovedi</h4></div></div>
-              <pre class="text-block">${escapeHtml(parsed.draft_reply)}</pre>
-            </div>
-          ` : ""}
-        </div>
-      ` : ""}
+      ${renderEmailAiProposal(email)}
       <div class="section-card">
         <div class="panel-header"><div><h4>PĹ™Ă­lohy</h4></div></div>
         <div class="toolbar">${attachments}</div>
@@ -1851,6 +1858,7 @@ function renderProjectWorkspace() {
 function renderDashboardView() {
   const counts = state.dashboard?.counts || {};
   const finance = state.dashboard?.finance || {};
+  const triage = state.dashboard?.triage || {};
   const totalHours = state.worklogs.reduce((sum, item) => sum + Number(item.hours || 0), 0);
   const monthKey = state.calendarMonth || monthStartKey();
   const selectedDateKey = state.selectedCalendarDate || toDateKey();
@@ -1919,6 +1927,21 @@ function renderDashboardView() {
             ])}
           </div>
           <div class="panel">
+            <div class="panel-header"><div><h3>AI triáž</h3><p>Kolik návrhů AI vzniklo a jak často se shodly s potvrzenou akcí.</p></div></div>
+            ${renderSummaryStrip([
+              { label: "AI návrhů", value: triage.suggested_total || 0 },
+              { label: "Potvrzeno", value: triage.confirmed_total || 0 },
+              { label: "Shoda", value: triage.matched_total || 0 },
+              { label: "Neshoda", value: triage.mismatched_total || 0 },
+            ])}
+            <div class="detail-grid ai-detail-grid">
+              <div class="detail-item"><span class="detail-item-label">Čeká na potvrzení</span><span class="detail-item-value">${triage.pending_review_total || 0}</span></div>
+              <div class="detail-item"><span class="detail-item-label">Top AI akce</span><span class="detail-item-value">${escapeHtml((triage.top_suggested_actions || []).map((item) => `${buildAiActionLabel(item.action)} (${item.count})`).join(", ") || "-")}</span></div>
+              <div class="detail-item"><span class="detail-item-label">Top potvrzené akce</span><span class="detail-item-value">${escapeHtml((triage.top_confirmed_actions || []).map((item) => `${buildAiActionLabel(item.action)} (${item.count})`).join(", ") || "-")}</span></div>
+              <div class="detail-item"><span class="detail-item-label">Přesnost</span><span class="detail-item-value">${triage.confirmed_total ? `${Math.round((Number(triage.matched_total || 0) / Number(triage.confirmed_total || 1)) * 100)} %` : "-"}</span></div>
+            </div>
+          </div>
+          <div class="panel">
             <div class="panel-header"><div><h3>Nejbližší akce</h3><p>Co tě čeká v příštích dnech.</p></div></div>
             <div class="calendar-upcoming-list">
               ${upcomingEvents.length ? upcomingEvents.map((event) => `
@@ -1983,6 +2006,9 @@ function renderConversationDetail(detail) {
   if (!detail) return renderEmpty("Vyber konverzaci ze seznamu.");
   const emailIds = detail.emails.map((item) => item.id).join(",");
   const participants = (detail.item.participants || []).join(", ");
+  const aiCandidate = [...detail.emails]
+    .reverse()
+    .find((email) => Object.keys(getEmailAiSuggestion(email)).length) || null;
   return `
     <div class="detail-shell">
       <div class="hero-card">
@@ -2001,6 +2027,7 @@ function renderConversationDetail(detail) {
         <button type="button" class="button button-secondary" data-conversation-assign="${escapeHtml(emailIds)}">PĹ™iĹ™adit celĂ© vlĂˇkno</button>
         <button type="button" class="button button-primary" data-create-project-from-email="${escapeHtml(detail.emails[0]?.id || "")}">VytvoĹ™it zakĂˇzku z vlĂˇkna</button>
       </div>
+      ${aiCandidate ? renderEmailAiProposal(aiCandidate, { heading: "AI navrh k posledni zprave" }) : ""}
       ${detail.emails.map((email) => `
         <div class="section-card">
           <div class="panel-header"><div><h4>${escapeHtml(email.subject || "Bez pĹ™edmÄ›tu")}</h4><p>${escapeHtml(email.sender)} Â· ${formatDate(email.received_at)}</p></div></div>

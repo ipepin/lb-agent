@@ -65,6 +65,69 @@ class TestDashboardService(unittest.TestCase):
         self.assertEqual(snapshot["counts"]["open_tasks"], 1)
         self.assertEqual(snapshot["counts"]["active_projects"], 1)
 
+    def test_snapshot_includes_ai_triage_stats(self) -> None:
+        crud.create_email(
+            self.config,
+            Email(
+                id="email-ai-1",
+                thread_id="thread-ai-1",
+                sender="client@example.com",
+                subject="Nova poptavka",
+                body="Prosim pripravit nabidku.",
+                received_at="2026-04-17T08:00:00+00:00",
+            ),
+            summary="Poptavka",
+            ai_payload={
+                "classification": {"action": "create_task"},
+                "user_decision": {"action": "create_task", "matches_ai_suggestion": True},
+            },
+        )
+        crud.create_email(
+            self.config,
+            Email(
+                id="email-ai-2",
+                thread_id="thread-ai-2",
+                sender="supplier@example.com",
+                subject="Faktura",
+                body="Zasilam fakturu.",
+                received_at="2026-04-17T09:00:00+00:00",
+            ),
+            summary="Faktura",
+            ai_payload={
+                "classification": {"action": "create_invoice"},
+                "user_decision": {"action": "ignore", "matches_ai_suggestion": False},
+            },
+        )
+        crud.create_email(
+            self.config,
+            Email(
+                id="email-ai-3",
+                thread_id="thread-ai-3",
+                sender="calendar@example.com",
+                subject="Termin schuzky",
+                body="Muzeme zitra v 10?",
+                received_at="2026-04-17T10:00:00+00:00",
+            ),
+            summary="Termin",
+            ai_payload={
+                "classification": {"action": "create_calendar_event"},
+            },
+        )
+
+        snapshot = self.dashboard_service.get_snapshot()
+        triage = snapshot["triage"]
+
+        self.assertEqual(triage["suggested_total"], 3)
+        self.assertEqual(triage["confirmed_total"], 2)
+        self.assertEqual(triage["matched_total"], 1)
+        self.assertEqual(triage["mismatched_total"], 1)
+        self.assertEqual(triage["pending_review_total"], 1)
+        self.assertEqual(len(triage["top_suggested_actions"]), 3)
+        self.assertEqual(
+            {item["action"] for item in triage["top_suggested_actions"]},
+            {"create_task", "create_invoice", "create_calendar_event"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
