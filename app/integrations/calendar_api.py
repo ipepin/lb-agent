@@ -119,9 +119,21 @@ class CalendarApiClient:
             if credentials and credentials.expired and credentials.refresh_token:
                 if Request is None:
                     return None
-                credentials.refresh(Request())
-                self._save_credentials(credentials)
-                return credentials
+                try:
+                    credentials.refresh(Request())
+                except Exception as exc:
+                    if not interactive:
+                        logger.warning("Stored Google Calendar OAuth token is invalid: %s", exc)
+                        return None
+                    logger.warning(
+                        "Stored Google Calendar OAuth token is invalid, starting a new login: %s",
+                        exc,
+                    )
+                    credentials = None
+                    self._delete_token()
+                else:
+                    self._save_credentials(credentials)
+                    return credentials
 
         if interactive:
             return self._run_oauth_flow()
@@ -150,6 +162,11 @@ class CalendarApiClient:
             return
         ensure_directory(token_path.parent)
         token_path.write_text(credentials.to_json(), encoding="utf-8")
+
+    def _delete_token(self) -> None:
+        token_path = self.config.google_calendar_token_path
+        if token_path is not None and token_path.exists():
+            token_path.unlink()
 
     def _normalize_datetime_string(self, value: str) -> str:
         normalized = value.strip()
