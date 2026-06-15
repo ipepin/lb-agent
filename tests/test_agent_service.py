@@ -78,6 +78,7 @@ class TestAgentService(unittest.TestCase):
         stored_emails = list(crud.list_emails(self.config))
         self.assertEqual(len(stored_emails), 1)
         self.assertEqual(stored_emails[0].category, "uncategorized")
+        self.assertEqual(stored_emails[0].summary, "Company: ACME s.r.o. Splatnost: 2026-04-30")
         self.assertEqual(result.approval_ids, [])
         self.assertEqual(result.reminder_ids, [])
 

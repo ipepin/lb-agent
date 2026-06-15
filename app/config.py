@@ -26,6 +26,8 @@ class AppConfig:
     idoklad_client_id: str = ""
     idoklad_client_secret: str = ""
     auth_session_secret: str = "lb-agent-dev-secret"
+    secure_session_cookies: bool = False
+    cors_allowed_origins: tuple[str, ...] = ()
     bootstrap_owner_email: str = "pepa"
     bootstrap_owner_password: str = "p"
     bootstrap_owner_name: str = "Pepa"
@@ -82,6 +84,11 @@ def load_config() -> AppConfig:
         value=os.getenv("GOOGLE_CALENDAR_TOKEN_PATH", ""),
         default=project_root / "data" / "google_calendar_token.json",
     )
+    cors_allowed_origins = tuple(
+        origin.strip()
+        for origin in os.getenv("CORS_ALLOWED_ORIGINS", "https://agent.lb-eltech.cz").split(",")
+        if origin.strip()
+    )
 
     return AppConfig(
         project_root=project_root,
@@ -103,6 +110,8 @@ def load_config() -> AppConfig:
         idoklad_client_id=os.getenv("IDOKLAD_CLIENT_ID", ""),
         idoklad_client_secret=os.getenv("IDOKLAD_CLIENT_SECRET", ""),
         auth_session_secret=os.getenv("AUTH_SESSION_SECRET", "lb-agent-dev-secret"),
+        secure_session_cookies=os.getenv("SECURE_SESSION_COOKIES", "true").strip().lower() in {"1", "true", "yes", "on"},
+        cors_allowed_origins=cors_allowed_origins,
         bootstrap_owner_email=os.getenv("BOOTSTRAP_OWNER_EMAIL", "pepa"),
         bootstrap_owner_password=os.getenv("BOOTSTRAP_OWNER_PASSWORD", "p"),
         bootstrap_owner_name=os.getenv("BOOTSTRAP_OWNER_NAME", "Pepa"),

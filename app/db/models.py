@@ -102,6 +102,15 @@ class WorkerModel:
 
 
 @dataclass(slots=True)
+class ProjectWorkerRateModel:
+    project_id: int
+    worker_id: int
+    payout_rate: float | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(slots=True)
 class UserModel:
     id: int
     email: str

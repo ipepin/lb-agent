@@ -136,6 +136,18 @@ CREATE TABLE IF NOT EXISTS workers (
 """
 
 
+PROJECT_WORKER_RATES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS project_worker_rates (
+    project_id INTEGER NOT NULL,
+    worker_id INTEGER NOT NULL,
+    payout_rate REAL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, worker_id)
+);
+"""
+
+
 WORK_LOGS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS work_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -352,6 +364,7 @@ def initialize_database(config: AppConfig) -> None:
         connection.execute(USERS_TABLE_SQL)
         connection.execute(PROJECTS_TABLE_SQL)
         connection.execute(WORKERS_TABLE_SQL)
+        connection.execute(PROJECT_WORKER_RATES_TABLE_SQL)
         connection.execute(WORK_LOGS_TABLE_SQL)
         connection.execute(PROJECT_DOCUMENTS_TABLE_SQL)
         connection.execute(PROJECT_TIMELINE_EVENTS_TABLE_SQL)

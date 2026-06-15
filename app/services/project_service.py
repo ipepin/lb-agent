@@ -166,10 +166,17 @@ class ProjectService:
     def get_project_finance_summary(self, project_id: int) -> dict[str, float]:
         _, _, invoices, work_logs, _ = self.get_project_summary(project_id)
         workers = {item.id: item for item in crud.list_workers(self.config)}
+        project_rates = {
+            item.worker_id: item.payout_rate
+            for item in crud.list_project_worker_rates(self.config, project_id)
+        }
 
         def resolve_payout_amount(work_log: WorkLogModel) -> float:
             if work_log.payout_amount is not None:
                 return float(work_log.payout_amount)
+            project_rate = project_rates.get(work_log.worker_id)
+            if project_rate is not None and float(project_rate) > 0:
+                return float(work_log.hours or 0) * float(project_rate) + float(work_log.material_cost or 0)
             worker = workers.get(work_log.worker_id)
             if worker is None:
                 return 0.0

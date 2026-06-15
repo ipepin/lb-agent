@@ -5,7 +5,7 @@ from typing import Sequence
 from app.config import AppConfig
 from app.db import crud
 from app.db.models import WorkLogModel
-from app.schemas.entities import WorkLog
+from app.schemas.entities import ProjectWorkerRate, WorkLog
 from app.utils.dates import utc_now_iso
 
 
@@ -19,6 +19,14 @@ def _resolve_worker_rate(worker: object | None) -> float | None:
     if hourly_rate is not None and float(hourly_rate) > 0:
         return float(hourly_rate)
     return None
+
+
+def _resolve_project_worker_rate(config: AppConfig, project_id: int, worker_id: int) -> float | None:
+    project_rate = crud.get_project_worker_rate(config, project_id, worker_id)
+    if project_rate is not None and project_rate.payout_rate is not None and float(project_rate.payout_rate) > 0:
+        return float(project_rate.payout_rate)
+    worker = crud.get_worker(config, worker_id)
+    return _resolve_worker_rate(worker)
 
 
 class WorkLogService:
@@ -45,7 +53,7 @@ class WorkLogService:
         worker = crud.get_worker(self.config, worker_id)
         resolved_payout_amount = payout_amount
         if resolved_payout_amount is None and worker is not None:
-            rate = _resolve_worker_rate(worker)
+            rate = _resolve_project_worker_rate(self.config, project_id, worker_id)
             if rate is not None:
                 resolved_payout_amount = round(float(hours) * float(rate) + float(material_cost or 0), 2)
 
@@ -77,13 +85,26 @@ class WorkLogService:
     def resolve_payout_amount(self, item: WorkLogModel) -> float:
         if item.payout_amount is not None:
             return round(float(item.payout_amount), 2)
-        worker = crud.get_worker(self.config, item.worker_id)
-        if worker is None:
-            return 0.0
-        rate = _resolve_worker_rate(worker)
+        rate = _resolve_project_worker_rate(self.config, item.project_id, item.worker_id)
         if rate is None:
             return 0.0
         return round(float(item.hours or 0) * float(rate) + float(item.material_cost or 0), 2)
+
+    def list_project_worker_rates(self, project_id: int) -> Sequence[object]:
+        return crud.list_project_worker_rates(self.config, project_id)
+
+    def set_project_worker_rate(self, *, project_id: int, worker_id: int, payout_rate: float | None) -> None:
+        crud.set_project_worker_rate(
+            self.config,
+            ProjectWorkerRate(
+                project_id=project_id,
+                worker_id=worker_id,
+                payout_rate=payout_rate,
+            ),
+        )
+
+    def delete_project_worker_rate(self, *, project_id: int, worker_id: int) -> bool:
+        return crud.delete_project_worker_rate(self.config, project_id, worker_id)
 
     def set_payment_status(self, work_log_id: int, *, is_paid: bool) -> bool:
         return crud.update_work_log_payment_status(

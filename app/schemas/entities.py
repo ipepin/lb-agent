@@ -126,6 +126,13 @@ class Worker:
 
 
 @dataclass(slots=True)
+class ProjectWorkerRate:
+    project_id: int
+    worker_id: int
+    payout_rate: float | None = None
+
+
+@dataclass(slots=True)
 class User:
     email: str
     password_hash: str

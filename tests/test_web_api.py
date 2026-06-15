@@ -83,7 +83,7 @@ class TestWebApi(unittest.TestCase):
         response = worker_client.get("/api/emails")
         self.assertEqual(response.status_code, 403)
 
-    def test_worker_sees_all_projects(self) -> None:
+    def test_worker_sees_only_assigned_projects(self) -> None:
         worker_id = crud.create_worker(
             self.config,
             Worker(full_name="Josef Pracovník", email="worker-all@example.com"),
@@ -99,8 +99,19 @@ class TestWebApi(unittest.TestCase):
             ),
         )
 
-        self.client.post("/api/projects", json={"name": "Zakázka A", "description": "", "status": "new"})
-        self.client.post("/api/projects", json={"name": "Zakázka B", "description": "", "status": "new"})
+        project_a_response = self.client.post("/api/projects", json={"name": "Zakázka A", "description": "", "status": "new"})
+        project_b_response = self.client.post("/api/projects", json={"name": "Zakázka B", "description": "", "status": "new"})
+        project_a_id = project_a_response.json()["item"]["id"]
+        project_b_id = project_b_response.json()["item"]["id"]
+        self.client.post(
+            "/api/tasks",
+            json={
+                "title": "Práce pro Josefa",
+                "project_id": project_a_id,
+                "assigned_worker_id": worker_id,
+                "assigned_worker_ids": [worker_id],
+            },
+        )
 
         worker_client = TestClient(create_app(self.config))
         login_response = worker_client.post(
@@ -111,7 +122,13 @@ class TestWebApi(unittest.TestCase):
 
         projects_response = worker_client.get("/api/projects")
         self.assertEqual(projects_response.status_code, 200)
-        self.assertEqual(len(projects_response.json()["items"]), 2)
+        projects = projects_response.json()["items"]
+        self.assertEqual([item["id"] for item in projects], [project_a_id])
+
+        assigned_detail_response = worker_client.get(f"/api/projects/{project_a_id}")
+        forbidden_detail_response = worker_client.get(f"/api/projects/{project_b_id}")
+        self.assertEqual(assigned_detail_response.status_code, 200)
+        self.assertEqual(forbidden_detail_response.status_code, 403)
 
     def test_owner_can_manage_users(self) -> None:
         worker_id = crud.create_worker(
@@ -822,6 +839,47 @@ class TestWebApi(unittest.TestCase):
         summary_items = summary_response.json()["items"]
         self.assertEqual(summary_items[0]["unpaid_total"], 0.0)
         self.assertEqual(summary_items[0]["paid_total"], 3500.0)
+
+    def test_project_worker_rate_is_used_for_worklog_and_project_detail(self) -> None:
+        worker_response = self.client.post(
+            "/api/workers",
+            json={"full_name": "Ladislav Belani", "payout_rate": 350},
+        )
+        self.assertEqual(worker_response.status_code, 200)
+        worker_id = worker_response.json()["item"]["id"]
+
+        project_response = self.client.post(
+            "/api/projects",
+            json={"name": "Zakazka Individualni Sazba", "description": "", "status": "new"},
+        )
+        self.assertEqual(project_response.status_code, 200)
+        project_id = project_response.json()["item"]["id"]
+
+        rates_response = self.client.post(
+            f"/api/projects/{project_id}/worker-rates",
+            json={"items": [{"worker_id": worker_id, "payout_rate": 500}]},
+        )
+        self.assertEqual(rates_response.status_code, 200)
+        self.assertEqual(len(rates_response.json()["items"]), 1)
+        self.assertEqual(rates_response.json()["items"][0]["payout_rate"], 500.0)
+
+        worklog_response = self.client.post(
+            "/api/worklogs",
+            json={
+                "project_id": project_id,
+                "worker_id": worker_id,
+                "work_date": "2026-05-13",
+                "hours": 8,
+                "material_cost": 200,
+                "notes": "Náročnější práce",
+            },
+        )
+        self.assertEqual(worklog_response.status_code, 200)
+        self.assertEqual(worklog_response.json()["item"]["payout_amount"], 4200.0)
+
+        detail_response = self.client.get(f"/api/projects/{project_id}")
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.json()["worker_rates"][0]["payout_rate"], 500.0)
 
     def test_delete_worklog(self) -> None:
         worker_response = self.client.post(

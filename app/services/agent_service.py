@@ -34,8 +34,8 @@ class AgentService:
     def process_email(self, email: Email) -> EmailProcessingResult:
         classification, parsed_email = self.ai_triage_service.analyze_email(email)
         email.category = "uncategorized"
-        email.priority = "normal"
-        crud.create_email(self.config, email, summary="")
+        email.priority = classification.priority or "normal"
+        crud.create_email(self.config, email, summary=parsed_email.summary)
 
         return EmailProcessingResult(
             email=email,
@@ -113,14 +113,17 @@ class AgentService:
         new_messages: list[Email],
         existing_emails: list[object],
     ) -> str:
-        timestamps: list[str] = []
-        if last_sync_at:
-            timestamps.append(last_sync_at)
-        timestamps.extend(
+        new_message_timestamps = [
             message.received_at
             for message in new_messages
             if message.received_at
-        )
+        ]
+        if new_message_timestamps:
+            return max(new_message_timestamps)
+
+        timestamps: list[str] = []
+        if last_sync_at:
+            timestamps.append(last_sync_at)
         timestamps.extend(
             getattr(email, "received_at", "")
             for email in existing_emails

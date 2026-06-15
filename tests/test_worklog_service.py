@@ -115,6 +115,31 @@ class TestWorkLogService(unittest.TestCase):
         self.assertEqual(summary[0]["payout_total"], 875.0)
         self.assertEqual(summary[0]["unpaid_total"], 875.0)
 
+    def test_create_work_log_prefers_project_worker_rate(self) -> None:
+        project_id = self.project_service.create_project("Zakazka Extra Sazba")
+        worker_id = self.worker_service.create_worker(
+            "Ladislav Belani",
+            payout_rate=350.0,
+        )
+        self.worklog_service.set_project_worker_rate(
+            project_id=project_id,
+            worker_id=worker_id,
+            payout_rate=500.0,
+        )
+
+        self.worklog_service.create_work_log(
+            project_id=project_id,
+            worker_id=worker_id,
+            work_date="2026-05-13",
+            hours=8.0,
+            material_cost=200.0,
+            payout_amount=None,
+        )
+
+        logs = list(self.worklog_service.list_work_logs(project_id=project_id))
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0].payout_amount, 4200.0)
+
 
 if __name__ == "__main__":
     unittest.main()

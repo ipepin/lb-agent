@@ -13,6 +13,7 @@ from app.db.models import (
     InvoiceModel,
     ProjectModel,
     ProjectDocumentModel,
+    ProjectWorkerRateModel,
     ProjectTimelineEventModel,
     ReminderModel,
     TaskModel,
@@ -27,6 +28,7 @@ from app.schemas.entities import (
     Invoice,
     Project,
     ProjectDocument,
+    ProjectWorkerRate,
     Reminder,
     Task,
     User,
@@ -1022,6 +1024,107 @@ def get_worker(config: AppConfig, worker_id: int) -> WorkerModel | None:
     )
 
 
+def set_project_worker_rate(
+    config: AppConfig,
+    project_worker_rate: ProjectWorkerRate,
+) -> None:
+    now = utc_now_iso()
+    with get_connection(config.db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO project_worker_rates (
+                project_id, worker_id, payout_rate, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(project_id, worker_id)
+            DO UPDATE SET
+                payout_rate = excluded.payout_rate,
+                updated_at = excluded.updated_at
+            """,
+            (
+                project_worker_rate.project_id,
+                project_worker_rate.worker_id,
+                project_worker_rate.payout_rate,
+                now,
+                now,
+            ),
+        )
+        connection.commit()
+
+
+def list_project_worker_rates(
+    config: AppConfig,
+    project_id: int | None = None,
+) -> Sequence[ProjectWorkerRateModel]:
+    query = """
+        SELECT project_id, worker_id, payout_rate, created_at, updated_at
+        FROM project_worker_rates
+    """
+    params: list[object] = []
+    if project_id is not None:
+        query += " WHERE project_id = ?"
+        params.append(project_id)
+    query += " ORDER BY project_id ASC, worker_id ASC"
+
+    with get_connection(config.db_path) as connection:
+        rows = connection.execute(query, params).fetchall()
+
+    return [
+        ProjectWorkerRateModel(
+            project_id=row["project_id"],
+            worker_id=row["worker_id"],
+            payout_rate=row["payout_rate"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+        for row in rows
+    ]
+
+
+def get_project_worker_rate(
+    config: AppConfig,
+    project_id: int,
+    worker_id: int,
+) -> ProjectWorkerRateModel | None:
+    with get_connection(config.db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT project_id, worker_id, payout_rate, created_at, updated_at
+            FROM project_worker_rates
+            WHERE project_id = ? AND worker_id = ?
+            """,
+            (project_id, worker_id),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return ProjectWorkerRateModel(
+        project_id=row["project_id"],
+        worker_id=row["worker_id"],
+        payout_rate=row["payout_rate"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def delete_project_worker_rate(
+    config: AppConfig,
+    project_id: int,
+    worker_id: int,
+) -> bool:
+    with get_connection(config.db_path) as connection:
+        cursor = connection.execute(
+            """
+            DELETE FROM project_worker_rates
+            WHERE project_id = ? AND worker_id = ?
+            """,
+            (project_id, worker_id),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+
+
 def update_worker(config: AppConfig, worker_id: int, worker: Worker) -> bool:
     with get_connection(config.db_path) as connection:
         cursor = connection.execute(
@@ -1678,6 +1781,13 @@ def delete_project(config: AppConfig, project_id: int) -> bool:
         )
         connection.execute(
             """
+            DELETE FROM project_worker_rates
+            WHERE project_id = ?
+            """,
+            (project_id,),
+        )
+        connection.execute(
+            """
             DELETE FROM tasks
             WHERE project_id = ?
             """,
@@ -1742,6 +1852,13 @@ def delete_worker(config: AppConfig, worker_id: int) -> bool:
         connection.execute(
             """
             DELETE FROM task_workers
+            WHERE worker_id = ?
+            """,
+            (worker_id,),
+        )
+        connection.execute(
+            """
+            DELETE FROM project_worker_rates
             WHERE worker_id = ?
             """,
             (worker_id,),

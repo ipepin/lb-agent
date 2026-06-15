@@ -98,6 +98,7 @@ const state = {
   projectSection: "overview",
   invoices: [],
   workers: [],
+  projectWorkerRates: [],
   worklogs: [],
   worklogSummary: [],
   selectedConversationId: null,
@@ -121,6 +122,9 @@ const state = {
   worklogWorkerFilter: "",
   worklogProjectFilter: "",
   worklogPaymentFilter: "all",
+  worklogViewMode: "overview",
+  workerPortalSection: "today",
+  workerPortalProjectId: null,
   projectAutosaveStatus: "idle",
   calendarMonth: null,
   selectedCalendarDate: null,
@@ -128,6 +132,7 @@ const state = {
 };
 
 let projectAutosaveTimer = null;
+let deferredInstallPrompt = null;
 
 const BROKEN_CZECH_REPLACEMENTS = [
   ["Â·", "·"],
@@ -362,7 +367,14 @@ function getWorkerName(workerId) {
   return worker ?worker.full_name : "-";
 }
 
-function getWorkerPayoutRate(workerId) {
+function getWorkerPayoutRate(workerId, projectId = null) {
+  const normalizedProjectId = Number(projectId || 0);
+  const normalizedWorkerId = Number(workerId || 0);
+  if (normalizedProjectId && normalizedWorkerId) {
+    const projectRate = state.projectWorkerRates.find((item) => Number(item.project_id) === normalizedProjectId && Number(item.worker_id) === normalizedWorkerId);
+    const payoutRate = parseDecimal(projectRate?.payout_rate);
+    if (payoutRate > 0) return payoutRate;
+  }
   const worker = state.workers.find((item) => item.id === Number(workerId));
   if (!worker) return null;
   const payoutRate = parseDecimal(worker.payout_rate);
@@ -377,7 +389,7 @@ function getWorklogPayoutAmount(item) {
   if (item.payout_amount !== null && item.payout_amount !== undefined && item.payout_amount !== "") {
     return Number(item.payout_amount) || 0;
   }
-  const rate = getWorkerPayoutRate(item.worker_id);
+  const rate = getWorkerPayoutRate(item.worker_id, item.project_id);
   if (!rate) return 0;
   return Math.round((Number(item.hours || 0) * Number(rate) + Number(item.material_cost || 0)) * 100) / 100;
 }
@@ -452,6 +464,7 @@ function updateWorklogPayoutSuggestion(form, force = false) {
   if (!["worker-portal-form"].includes(form.id)) return;
 
   const workerId = form.querySelector('[name="worker_id"]')?.value || "";
+  const projectId = form.querySelector('[name="project_id"]')?.value || "";
   const hours = parseDecimal(form.querySelector('[name="hours"]')?.value || 0);
   const rateInput = form.querySelector('[name="rate"]');
   const materialInput = form.querySelector('[name="material_cost"]');
@@ -459,7 +472,7 @@ function updateWorklogPayoutSuggestion(form, force = false) {
   if (!(materialInput instanceof HTMLInputElement)) return;
   if (!(payoutInput instanceof HTMLInputElement)) return;
 
-  const defaultRate = getWorkerPayoutRate(workerId);
+  const defaultRate = getWorkerPayoutRate(workerId, projectId);
   if (rateInput instanceof HTMLInputElement) {
     const shouldAutofillRate = force || rateInput.dataset.autoRate !== "false" || !rateInput.value;
     if (defaultRate !== null && shouldAutofillRate) {
@@ -496,7 +509,8 @@ function updateProjectWorklogRowPayout(row, force = false) {
   if (!(materialInput instanceof HTMLInputElement)) return;
   if (!(payoutInput instanceof HTMLInputElement)) return;
 
-  const defaultRate = getWorkerPayoutRate(workerInput.value);
+  const projectId = state.projectDetail?.item?.id || state.selectedProjectId || 0;
+  const defaultRate = getWorkerPayoutRate(workerInput.value, projectId);
   const shouldAutofillRate = rateInput.dataset.autoRate !== "false" || !rateInput.value;
   if (defaultRate !== null && shouldAutofillRate) {
     rateInput.value = String(parseDecimal(defaultRate));
@@ -535,6 +549,33 @@ function invoiceStateClass(invoice) {
 
 function worklogStateClass(item) {
   return item.payment_status === "paid" ?"ok" : "attention";
+}
+
+function getDuplicateWorklogGroups(items, projectId = null) {
+  const filtered = (items || []).filter((item) => !projectId || Number(item.project_id) === Number(projectId));
+  const grouped = new Map();
+  for (const item of filtered) {
+    const key = `${item.project_id}:${item.worker_id}:${item.work_date}`;
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        project_id: item.project_id,
+        project_name: getProjectName(item.project_id),
+        worker_id: item.worker_id,
+        worker_name: getWorkerName(item.worker_id),
+        work_date: item.work_date,
+        entry_count: 0,
+        total_hours: 0,
+        ids: [],
+      });
+    }
+    const group = grouped.get(key);
+    group.entry_count += 1;
+    group.total_hours += Number(item.hours || 0);
+    group.ids.push(item.id);
+  }
+  return Array.from(grouped.values())
+    .filter((item) => item.entry_count > 1)
+    .sort((a, b) => String(a.work_date || "").localeCompare(String(b.work_date || "")) || String(a.worker_name || "").localeCompare(String(b.worker_name || ""), "cs"));
 }
 
 function getCurrentRole() {
@@ -833,14 +874,19 @@ function renderTimeline(projectDetail) {
   `;
 }
 
+function getProjectWorkerRateValue(projectId, workerId) {
+  const item = state.projectWorkerRates.find((entry) => Number(entry.project_id) === Number(projectId) && Number(entry.worker_id) === Number(workerId));
+  return item?.payout_rate ?? "";
+}
+
 function getDashboardCalendarEvents() {
-  const events = [];
+  const eventMap = new Map();
   for (const task of state.tasks || []) {
     for (const event of task.calendar_events || []) {
       const startKey = toDateKey(event.starts_at);
       const endKey = toDateKey(event.ends_at || event.starts_at);
       if (!startKey) continue;
-      events.push({
+      const normalizedEvent = {
         id: event.id,
         title: event.title,
         starts_at: event.starts_at,
@@ -859,10 +905,21 @@ function getDashboardCalendarEvents() {
         attendee_emails: event.attendee_emails || [],
         completed_at: task.completed_at,
         completed_by: task.completed_by || null,
-      });
+        created_at: event.created_at || "",
+      };
+      const dedupeKey = [
+        task.id,
+        normalizedEvent.title,
+        normalizedEvent.starts_at,
+        normalizedEvent.ends_at,
+      ].join("|");
+      const existing = eventMap.get(dedupeKey);
+      if (!existing || String(existing.created_at || "") < String(normalizedEvent.created_at || "")) {
+        eventMap.set(dedupeKey, normalizedEvent);
+      }
     }
   }
-  return events.sort((a, b) => String(a.starts_at || "").localeCompare(String(b.starts_at || "")));
+  return Array.from(eventMap.values()).sort((a, b) => String(a.starts_at || "").localeCompare(String(b.starts_at || "")));
 }
 
 function eventOverlapsDate(event, dateKey) {
@@ -1009,6 +1066,9 @@ function renderCalendarAgenda(selectedDateKey) {
           <div class="calendar-agenda-row">
             <span><strong>Stav:</strong> ${escapeHtml(getTaskStatusLabel(event.task_status))}</span>
             <span><strong>Kalendář:</strong> ${escapeHtml(event.external_event_id ? "Google Kalendář" : "Jen lokálně")}</span>
+          </div>
+          <div class="calendar-agenda-row">
+            <span><strong>Zakázka:</strong> ${escapeHtml(event.project_name || "Bez zakázky")}</span>
           </div>
           ${event.task_status === "done" ? `
             <div class="calendar-agenda-row">
@@ -1228,12 +1288,31 @@ function renderTaskDetail(task) {
           { label: "Dokončil", value: task.completed_by?.full_name || "-" },
         ])}
         <div class="detail-grid">
+          <div class="detail-item"><span class="detail-item-label">Název zakázky</span><span class="detail-item-value">${escapeHtml(project?.name || "Bez zakázky")}</span></div>
           <div class="detail-item"><span class="detail-item-label">E-maily pro notifikaci</span><span class="detail-item-value">${escapeHtml(recipients.join(", ") || "-")}</span></div>
           <div class="detail-item"><span class="detail-item-label">Pozvaní do kalendáře</span><span class="detail-item-value">${escapeHtml(calendarInvitees)}</span></div>
           <div class="detail-item"><span class="detail-item-label">Poslední kalendářová událost</span><span class="detail-item-value">${latestCalendarEvent ?`${escapeHtml(latestCalendarEvent.title)} · ${formatDate(latestCalendarEvent.starts_at)}` : "-"}</span></div>
           <div class="detail-item"><span class="detail-item-label">Odhad hodin</span><span class="detail-item-value">${task.estimated_hours ?? "-"}</span></div>
           <div class="detail-item"><span class="detail-item-label">Dokončeno</span><span class="detail-item-value">${task.completed_at ? formatDate(task.completed_at, true) : "-"}</span></div>
         </div>
+        ${project ?`
+          <div class="section-card">
+            <div class="panel-header"><div><h4>Podrobnosti zakázky</h4></div></div>
+            <div class="detail-grid">
+              <div class="detail-item"><span class="detail-item-label">Zakázka</span><span class="detail-item-value">${escapeHtml(project.name || "-")}</span></div>
+              <div class="detail-item"><span class="detail-item-label">Kód</span><span class="detail-item-value">${escapeHtml(project.code || "-")}</span></div>
+              <div class="detail-item"><span class="detail-item-label">Stav zakázky</span><span class="detail-item-value">${escapeHtml(getProjectStatusLabel(project.status))}</span></div>
+              <div class="detail-item"><span class="detail-item-label">Priorita zakázky</span><span class="detail-item-value">${escapeHtml(getPriorityLabel(project.priority || "normal"))}</span></div>
+              <div class="detail-item"><span class="detail-item-label">Zákazník / majitel</span><span class="detail-item-value">${escapeHtml(project.customer_name || "-")}</span></div>
+              <div class="detail-item"><span class="detail-item-label">Kontaktní osoba</span><span class="detail-item-value">${escapeHtml(project.contact_person || "-")}</span></div>
+              <div class="detail-item"><span class="detail-item-label">E-mail</span><span class="detail-item-value">${escapeHtml(project.contact_email || "-")}</span></div>
+              <div class="detail-item"><span class="detail-item-label">Telefon</span><span class="detail-item-value">${escapeHtml(project.contact_phone || "-")}</span></div>
+              <div class="detail-item detail-item-wide"><span class="detail-item-label">Adresa / ulice</span><span class="detail-item-value">${escapeHtml(project.address || "-")}</span></div>
+              <div class="detail-item detail-item-wide"><span class="detail-item-label">Poznámky k zakázce</span><span class="detail-item-value">${escapeHtml(project.notes || "-")}</span></div>
+              <div class="detail-item detail-item-wide"><span class="detail-item-label">Interní poznámky</span><span class="detail-item-value">${escapeHtml(project.internal_notes || "-")}</span></div>
+            </div>
+          </div>
+        ` : ""}
         ${sourceEmail ?`
           <div class="section-card">
             <div class="panel-header"><div><h4>Zdrojový e-mail</h4></div></div>
@@ -1448,12 +1527,36 @@ function renderProjectWorkspace() {
     `;
   }
   if (state.projectSection === "worklogs") {
+    const duplicateProjectLogs = getDuplicateWorklogGroups(detail.work_logs || [], project.id);
     sectionBody = `
       <div class="section-card">
+        <div class="panel-header"><div><h4>Sazby pracovníků pro tuto zakázku</h4><p>Když tu necháš sazbu prázdnou, použije se výplatní sazba z profilu pracovníka.</p></div></div>
+        <form id="project-worker-rates-form" class="compact-form" data-project-id="${project.id}">
+          ${renderDataTable(
+            ["Pracovník", "Sazba pro zakázku", "Výchozí sazba"],
+            state.workers
+              .filter((worker) => worker.status !== "inactive")
+              .map((worker) => `
+                <tr>
+                  <td>${escapeHtml(worker.full_name)}</td>
+                  <td><input name="project_rate_${worker.id}" type="text" inputmode="decimal" placeholder="Bez změny" value="${escapeHtml(getProjectWorkerRateValue(project.id, worker.id))}"></td>
+                  <td>${getWorkerPayoutRate(worker.id) ? formatCurrency(getWorkerPayoutRate(worker.id)) : "-"}</td>
+                </tr>
+              `),
+            "Zatím bez pracovníků.",
+          )}
+          <div class="toolbar">
+            <span class="selection-chip">Prázdná hodnota = použít sazbu z profilu.</span>
+            <span class="toolbar-spacer"></span>
+            <button class="button button-secondary" type="submit">Uložit sazby zakázky</button>
+          </div>
+        </form>
+      </div>
+      <div class="section-card">
         <div class="panel-header"><div><h4>Zapsat práci více pracovníkům</h4><p>Jedno datum, společná poznámka a více řádků pracovníků najednou.</p></div></div>
-        <form id="project-worklog-form" class="compact-form" data-project-id="${project.id}">
+        <form id="project-worklog-form" class="compact-form" data-project-id="${project.id}" novalidate>
           <div class="row">
-            <input name="work_date" type="date" required>
+            <input name="work_date" type="date" required value="${escapeHtml(toDateKey())}">
             <textarea name="notes" rows="2" placeholder="Společná poznámka k práci"></textarea>
           </div>
           <div class="worklog-entry-grid worklog-entry-grid-head">
@@ -1482,6 +1585,24 @@ function renderProjectWorkspace() {
           </div>
         </form>
       </div>
+      ${duplicateProjectLogs.length ? `
+        <div class="section-card">
+          <div class="panel-header"><div><h4>Kontrola hodin</h4><p>Tyto dny mají pro stejného pracovníka více než jeden zápis. Zkontroluj, jestli nejde o omyl.</p></div></div>
+          ${renderDataTable(
+            ["Datum", "Pracovník", "Počet zápisů", "Součet hodin", "ID položek"],
+            duplicateProjectLogs.map((item) => `
+              <tr class="attention">
+                <td>${formatDate(item.work_date, false)}</td>
+                <td>${escapeHtml(item.worker_name)}</td>
+                <td>${escapeHtml(item.entry_count)}</td>
+                <td>${formatHours(item.total_hours)}</td>
+                <td>${escapeHtml(item.ids.join(", "))}</td>
+              </tr>
+            `),
+            "",
+          )}
+        </div>
+      ` : ""}
       ${renderDataTable(
         ["Datum", "Pracovník", "Hodiny", "Materiál", "K výplatě", "Proplaceno", "Akce"],
         (detail.work_logs || []).map((log) => `
@@ -1958,14 +2079,49 @@ function renderWorkersView() {
 
 function renderWorklogsView() {
   const items = getFilteredWorklogs();
+  const duplicateGroups = getDuplicateWorklogGroups(items);
   const totalHours = items.reduce((sum, item) => sum + Number(item.hours || 0), 0);
   const totalPayout = items.reduce((sum, item) => sum + getWorklogPayoutAmount(item), 0);
   const unpaid = items.reduce((sum, item) => sum + (item.payment_status === "paid" ?0 : getWorklogPayoutAmount(item)), 0);
   const paid = items.reduce((sum, item) => sum + (item.payment_status === "paid" ?getWorklogPayoutAmount(item) : 0), 0);
+  const mode = state.worklogViewMode || "overview";
   const projectId = state.worklogProjectFilter ? Number(state.worklogProjectFilter) : null;
+  const workerId = state.worklogWorkerFilter ? Number(state.worklogWorkerFilter) : null;
+  const scopedSummary = state.worklogSummary.filter((item) => {
+    if (state.worklogProjectFilter && item.project_id !== Number(state.worklogProjectFilter)) return false;
+    if (state.worklogWorkerFilter && String(item.worker_id) !== state.worklogWorkerFilter) return false;
+    if (state.worklogPaymentFilter === "unpaid" && Number(item.unpaid_total || 0) <= 0) return false;
+    if (state.worklogPaymentFilter === "paid" && Number(item.paid_total || 0) <= 0) return false;
+    return true;
+  });
   const projectSummaries = projectId
-    ? state.worklogSummary.filter((item) => item.project_id === projectId && (!state.worklogWorkerFilter || String(item.worker_id) === state.worklogWorkerFilter))
+    ? scopedSummary.filter((item) => item.project_id === projectId)
     : [];
+  const groupedProjects = Array.from(
+    scopedSummary.reduce((map, item) => {
+      const key = item.project_id;
+      if (!map.has(key)) {
+        map.set(key, {
+          project_id: item.project_id,
+          project_name: getProjectName(item.project_id),
+          worker_count: 0,
+          entry_count: 0,
+          hours: 0,
+          payout_total: 0,
+          unpaid_total: 0,
+          paid_total: 0,
+        });
+      }
+      const row = map.get(key);
+      row.worker_count += 1;
+      row.entry_count += Number(item.entry_count || 0);
+      row.hours += Number(item.hours || 0);
+      row.payout_total += Number(item.payout_total || 0);
+      row.unpaid_total += Number(item.unpaid_total || 0);
+      row.paid_total += Number(item.paid_total || 0);
+      return map;
+    }, new Map()).values(),
+  ).sort((a, b) => a.project_name.localeCompare(b.project_name, "cs"));
   const selectedSummary = projectSummaries.find((item) => `${item.project_id}:${item.worker_id}` === state.selectedWorklogSummaryKey)
     || projectSummaries[0]
     || null;
@@ -1975,8 +2131,8 @@ function renderWorklogsView() {
   const selected = items.find((item) => item.id === state.selectedWorklogId) || items[0] || null;
   const focusWorkerId = selectedSummary
     ? selectedSummary.worker_id
-    : state.worklogWorkerFilter
-      ? Number(state.worklogWorkerFilter)
+    : workerId
+      ? workerId
       : selected?.worker_id || null;
   const workerItems = selectedSummary
     ? summaryWorkerItems
@@ -1987,6 +2143,26 @@ function renderWorklogsView() {
   const workerPayout = workerItems.reduce((sum, item) => sum + getWorklogPayoutAmount(item), 0);
   const workerUnpaid = workerItems.reduce((sum, item) => sum + (item.payment_status === "paid" ? 0 : getWorklogPayoutAmount(item)), 0);
   const workerPaid = workerItems.reduce((sum, item) => sum + (item.payment_status === "paid" ? getWorklogPayoutAmount(item) : 0), 0);
+  const workerProjectSummaries = focusWorkerId
+    ? scopedSummary
+      .filter((item) => item.worker_id === focusWorkerId)
+      .sort((a, b) => getProjectName(a.project_id).localeCompare(getProjectName(b.project_id), "cs"))
+    : [];
+  const selectedWorkerProject = workerProjectSummaries.find((item) => `${item.project_id}:${item.worker_id}` === state.selectedWorklogSummaryKey)
+    || workerProjectSummaries[0]
+    || null;
+  const workerProjectItems = selectedWorkerProject
+    ? items.filter((item) => item.project_id === selectedWorkerProject.project_id && item.worker_id === selectedWorkerProject.worker_id)
+    : [];
+  const overallProjectCount = groupedProjects.filter((item) => Number(item.unpaid_total || 0) > 0).length;
+  const overallWorkerCount = Array.from(new Set(scopedSummary.map((item) => item.worker_id))).length;
+  const modeButtons = `
+    <div class="toolbar">
+      <button type="button" class="button ${mode === "overview" ? "button-primary" : "button-secondary"}" data-worklog-view-mode="overview">Přehled</button>
+      <button type="button" class="button ${mode === "projects" ? "button-primary" : "button-secondary"}" data-worklog-view-mode="projects">Po zakázkách</button>
+      <button type="button" class="button ${mode === "workers" ? "button-primary" : "button-secondary"}" data-worklog-view-mode="workers">Po lidech</button>
+    </div>
+  `;
   return `
     <section class="view">
       ${renderSummaryStrip([
@@ -1997,22 +2173,124 @@ function renderWorklogsView() {
         { label: "Proplaceno", value: formatCurrency(paid) },
       ])}
       <div class="panel">
-        <div class="panel-header"><div><h3>Výkazy práce</h3><p>Tabulkový přehled, filtry a detail bez zbytečně velkých karet.</p></div></div>
-        <div class="toolbar">
-          <select id="worklog-worker-filter"><option value="">Všichni pracovníci</option>${renderWorkerOptions(Number(state.worklogWorkerFilter) || null)}</select>
-          <select id="worklog-project-filter"><option value="">Všechny zakázky</option>${renderProjectOptions(Number(state.worklogProjectFilter) || null)}</select>
-          <select id="worklog-payment-filter">
-            <option value="all" ${state.worklogPaymentFilter === "all" ?"selected" : ""}>Vše</option>
-            <option value="unpaid" ${state.worklogPaymentFilter === "unpaid" ?"selected" : ""}>Jen neproplacené</option>
-            <option value="paid" ${state.worklogPaymentFilter === "paid" ?"selected" : ""}>Jen proplacené</option>
-          </select>
-        </div>
-        ${projectId ? `
+        <div class="panel-header"><div><h3>Výkazy práce</h3><p>Nejdřív přehled, potom proplácení po zakázkách a nakonec pohled po lidech.</p></div></div>
+        ${modeButtons}
+        ${mode === "overview" ? `
+          <div class="toolbar">
+            <select id="worklog-payment-filter">
+              <option value="all" ${state.worklogPaymentFilter === "all" ?"selected" : ""}>Vše</option>
+              <option value="unpaid" ${state.worklogPaymentFilter === "unpaid" ?"selected" : ""}>Jen neproplacené</option>
+              <option value="paid" ${state.worklogPaymentFilter === "paid" ?"selected" : ""}>Jen proplacené</option>
+            </select>
+          </div>
+        ` : mode === "projects" ? `
+          <div class="toolbar">
+            <select id="worklog-project-filter"><option value="">Vyber zakázku</option>${renderProjectOptions(projectId)}</select>
+            <select id="worklog-payment-filter">
+              <option value="all" ${state.worklogPaymentFilter === "all" ?"selected" : ""}>Vše</option>
+              <option value="unpaid" ${state.worklogPaymentFilter === "unpaid" ?"selected" : ""}>Jen neproplacené</option>
+              <option value="paid" ${state.worklogPaymentFilter === "paid" ?"selected" : ""}>Jen proplacené</option>
+            </select>
+          </div>
+        ` : `
+          <div class="toolbar">
+            <select id="worklog-worker-filter"><option value="">Vyber pracovníka</option>${renderWorkerOptions(workerId)}</select>
+            <select id="worklog-payment-filter">
+              <option value="all" ${state.worklogPaymentFilter === "all" ?"selected" : ""}>Vše</option>
+              <option value="unpaid" ${state.worklogPaymentFilter === "unpaid" ?"selected" : ""}>Jen neproplacené</option>
+              <option value="paid" ${state.worklogPaymentFilter === "paid" ?"selected" : ""}>Jen proplacené</option>
+            </select>
+          </div>
+        `}
+        ${mode === "overview" ? `
+          ${renderSummaryStrip([
+            { label: "Zakázky k proplacení", value: overallProjectCount },
+            { label: "Pracovníků s výkazy", value: overallWorkerCount },
+            { label: "Celkem k výplatě", value: formatCurrency(totalPayout) },
+            { label: "Neproplaceno", value: formatCurrency(unpaid) },
+          ])}
+          ${duplicateGroups.length ? `
+            <div class="panel panel-soft">
+              <div class="panel-header"><div><h3>Kontrola hodin</h3><p>Nalezené duplicity pro stejného pracovníka ve stejný den. To bývá nejčastější zdroj chyb.</p></div></div>
+              ${renderDataTable(
+                ["Zakázka", "Datum", "Pracovník", "Počet zápisů", "Součet hodin", "ID položek"],
+                duplicateGroups.map((item) => `
+                  <tr class="attention">
+                    <td>${escapeHtml(item.project_name)}</td>
+                    <td>${formatDate(item.work_date, false)}</td>
+                    <td>${escapeHtml(item.worker_name)}</td>
+                    <td>${escapeHtml(item.entry_count)}</td>
+                    <td>${formatHours(item.total_hours)}</td>
+                    <td>${escapeHtml(item.ids.join(", "))}</td>
+                  </tr>
+                `),
+                "",
+              )}
+            </div>
+          ` : ""}
+          <div class="content-grid two-columns">
+            <div class="panel panel-soft">
+              <div class="panel-header"><div><h3>Zakázky k proplacení</h3><p>Souhrn po zakázkách. Kliknutím přejdeš do režimu zakázek.</p></div></div>
+              ${renderDataTable(
+                ["Zakázka", "Pracovníků", "Hodiny", "Celkem", "Neproplaceno"],
+                groupedProjects.map((item) => `
+                  <tr class="is-clickable" data-worklog-project-select="${item.project_id}">
+                    <td>${escapeHtml(item.project_name)}</td>
+                    <td>${escapeHtml(item.worker_count)}</td>
+                    <td>${formatHours(item.hours)}</td>
+                    <td>${formatCurrency(item.payout_total)}</td>
+                    <td>${formatCurrency(item.unpaid_total)}</td>
+                  </tr>
+                `),
+                "Podle aktuálního filtru nejsou žádné zakázky.",
+              )}
+            </div>
+            <div class="panel panel-soft">
+              <div class="panel-header"><div><h3>Pracovníci k proplacení</h3><p>Souhrn neproplacených částek po lidech. Kliknutím přejdeš do režimu po lidech.</p></div></div>
+              ${renderDataTable(
+                ["Pracovník", "Zakázek", "Hodiny", "Celkem", "Neproplaceno"],
+                Array.from(
+                  scopedSummary.reduce((map, item) => {
+                    const key = item.worker_id;
+                    if (!map.has(key)) {
+                      map.set(key, {
+                        worker_id: item.worker_id,
+                        worker_name: getWorkerName(item.worker_id),
+                        project_count: 0,
+                        hours: 0,
+                        payout_total: 0,
+                        unpaid_total: 0,
+                      });
+                    }
+                    const row = map.get(key);
+                    row.project_count += 1;
+                    row.hours += Number(item.hours || 0);
+                    row.payout_total += Number(item.payout_total || 0);
+                    row.unpaid_total += Number(item.unpaid_total || 0);
+                    return map;
+                  }, new Map()).values(),
+                ).sort((a, b) => a.worker_name.localeCompare(b.worker_name, "cs")).map((item) => `
+                  <tr class="is-clickable" data-worklog-worker-select="${item.worker_id}">
+                    <td>${escapeHtml(item.worker_name)}</td>
+                    <td>${escapeHtml(item.project_count)}</td>
+                    <td>${formatHours(item.hours)}</td>
+                    <td>${formatCurrency(item.payout_total)}</td>
+                    <td>${formatCurrency(item.unpaid_total)}</td>
+                  </tr>
+                `),
+                "Podle aktuálního filtru nejsou žádní pracovníci.",
+              )}
+            </div>
+          </div>
+        ` : mode === "projects" ? `
+          ${!projectId ? renderEmpty("Vyber zakázku v horním poli. Pak uvidíš pracovníky navázané na danou zakázku a možnost proplatit jim celou zakázku.") : `
           ${renderSummaryStrip([
             { label: "Zakázka", value: getProjectName(projectId) },
             { label: "Pracovníků", value: projectSummaries.length },
             { label: "Celkem hodin", value: formatHours(projectSummaries.reduce((sum, item) => sum + Number(item.hours || 0), 0)) },
             { label: "Celkem k výplatě", value: formatCurrency(projectSummaries.reduce((sum, item) => sum + Number(item.payout_total || 0), 0)) },
+            { label: "Neproplaceno", value: formatCurrency(projectSummaries.reduce((sum, item) => sum + Number(item.unpaid_total || 0), 0)) },
+            { label: "Proplaceno", value: formatCurrency(projectSummaries.reduce((sum, item) => sum + Number(item.paid_total || 0), 0)) },
           ])}
           ${renderDataTable(
             ["Pracovník", "Zápisů", "Hodiny", "K výplatě", "Neproplaceno", "Proplaceno"],
@@ -2028,26 +2306,63 @@ function renderWorklogsView() {
             `),
             "Pro tuto zakázku zatím nejsou zapsané žádné hodiny.",
           )}
-        ` : renderDataTable(
-          ["Datum", "Pracovník", "Zakázka", "Hodiny", "Vedlejší výdaj", "K výplatě", "Proplaceno", "Akce"],
-          items.map((item) => `
-            <tr class="is-clickable ${worklogStateClass(item)}" data-worklog-id="${item.id}">
-              <td>${formatDate(item.work_date, false)}</td>
-              <td>${escapeHtml(getWorkerName(item.worker_id))}</td>
-              <td>${escapeHtml(getProjectName(item.project_id))}</td>
-              <td>${formatHours(item.hours)}</td>
-              <td>${formatCurrency(item.material_cost)}</td>
-              <td>${formatCurrency(getWorklogPayoutAmount(item))}</td>
-              <td><input type="checkbox" data-worklog-paid-toggle="${item.id}" ${item.payment_status === "paid" ?"checked" : ""}></td>
-              <td><button type="button" class="button button-danger button-small" data-delete-worklog="${item.id}">Smazat</button></td>
-            </tr>
-          `),
-          "Žádné výkazy pro tento filtr.",
-        )}
+        `}
+        ` : `
+          ${!workerId ? renderEmpty("Vyber pracovníka v horním poli. Uvidíš jeho zakázky a potom i jednotlivé dny, které lze proplácet po částech.") : `
+            ${renderSummaryStrip([
+              { label: "Pracovník", value: getWorkerName(workerId) },
+              { label: "Celkem odpracováno", value: formatHours(items.filter((item) => item.worker_id === workerId).reduce((sum, item) => sum + Number(item.hours || 0), 0)) },
+              { label: "Celkem k výplatě", value: formatCurrency(items.filter((item) => item.worker_id === workerId).reduce((sum, item) => sum + getWorklogPayoutAmount(item), 0)) },
+              { label: "Celkem vyplaceno", value: formatCurrency(items.filter((item) => item.worker_id === workerId && item.payment_status === "paid").reduce((sum, item) => sum + getWorklogPayoutAmount(item), 0)) },
+              { label: "Aktuálně neproplaceno", value: formatCurrency(items.filter((item) => item.worker_id === workerId && item.payment_status !== "paid").reduce((sum, item) => sum + getWorklogPayoutAmount(item), 0)) },
+              { label: "Rozpracované zakázky", value: workerProjectSummaries.filter((item) => Number(item.unpaid_total || 0) > 0).length },
+            ])}
+            ${renderDataTable(
+              ["Zakázka", "Zápisů", "Hodiny", "Celkem", "Vyplaceno", "Neproplaceno", "Akce"],
+              workerProjectSummaries.map((item) => `
+                <tr class="is-clickable ${selectedWorkerProject && selectedWorkerProject.project_id === item.project_id ? "is-selected-row" : ""}" data-worklog-summary="${item.project_id}:${item.worker_id}">
+                  <td>${escapeHtml(getProjectName(item.project_id))}</td>
+                  <td>${escapeHtml(item.entry_count)}</td>
+                  <td>${formatHours(item.hours)}</td>
+                  <td>${formatCurrency(item.payout_total)}</td>
+                  <td>${formatCurrency(item.paid_total)}</td>
+                  <td>${formatCurrency(item.unpaid_total)}</td>
+                  <td>
+                    ${Number(item.unpaid_total || 0) > 0
+                      ? `<button type="button" class="button button-primary button-small" data-project-worklog-pay="${item.project_id}" data-worker-id="${item.worker_id}" data-paid="true">Proplatit zakázku</button>`
+                      : `<button type="button" class="button button-secondary button-small" data-project-worklog-pay="${item.project_id}" data-worker-id="${item.worker_id}" data-paid="false">Vrátit</button>`}
+                  </td>
+                </tr>
+              `),
+              "Vybraný pracovník zatím nemá žádné zakázky pro tento filtr.",
+            )}
+          `}
+        `}
       </div>
+      ${mode !== "overview" ? `
       <div class="panel">
-        <div class="panel-header"><div><h3>${projectId ? "Rozpad práce pracovníka" : "Práce pracovníka"}</h3><p>${projectId ? "Po kliknutí na pracovníka vidíš jednotlivé dny, kdy na zakázce dělal." : "Přehled všech zapsaných hodin vybraného pracovníka včetně stavu proplacení."}</p></div></div>
-        ${focusWorkerId ? `
+        <div class="panel-header"><div><h3>${mode === "workers" ? "Jednotlivé dny na zakázce" : projectId ? "Rozpad práce pracovníka" : "Práce pracovníka"}</h3><p>${mode === "workers" ? "Po kliknutí na zakázku vidíš jednotlivé dny. Tady lze proplácet po částech nebo smazat chybný zápis." : projectId ? "Po kliknutí na pracovníka vidíš jednotlivé dny, kdy na zakázce dělal." : "Přehled všech zapsaných hodin vybraného pracovníka včetně stavu proplacení."}</p></div></div>
+        ${mode === "workers" ? (selectedWorkerProject ? `
+          ${renderDataTable(
+            ["Datum", "Hodiny", "Vedlejší výdaj", "K výplatě", "Stav", "Akce"],
+            workerProjectItems.map((item) => `
+              <tr class="${worklogStateClass(item)}">
+                <td>${formatDate(item.work_date, false)}</td>
+                <td>${formatHours(item.hours)}</td>
+                <td>${formatCurrency(item.material_cost)}</td>
+                <td>${formatCurrency(getWorklogPayoutAmount(item))}</td>
+                <td>${escapeHtml(getPaymentStatusLabel(item.payment_status))}</td>
+                <td class="table-actions">
+                  ${item.payment_status === "paid"
+                    ? `<button type="button" class="button button-secondary button-small" data-worklog-pay="${item.id}" data-paid="false">Vrátit den</button>`
+                    : `<button type="button" class="button button-primary button-small" data-worklog-pay="${item.id}" data-paid="true">Proplatit den</button>`}
+                  <button type="button" class="button button-danger button-small" data-delete-worklog="${item.id}">Smazat</button>
+                </td>
+              </tr>
+            `),
+            "U této zakázky nejsou žádné dny práce.",
+          )}
+        ` : renderEmpty("Vyber nahoře pracovníka a klikni na konkrétní zakázku.")) : (focusWorkerId ? `
           ${renderSummaryStrip([
             { label: "Pracovník", value: getWorkerName(focusWorkerId) },
             { label: "Zakázka", value: selectedSummary ? getProjectName(selectedSummary.project_id) : "Všechny zakázky" },
@@ -2081,8 +2396,9 @@ function renderWorklogsView() {
               ? "Vybraný pracovník zatím nemá na této zakázce žádné zapsané dny."
               : "Vybraný pracovník zatím nemá žádné výkazy pro tento filtr.",
           )}
-        ` : renderEmpty(projectId ? "Vyber nahoře zakázku a klikni na konkrétního pracovníka." : "Vyber pracovníka filtrem nahoře nebo klikni na některý výkaz.")}
+        ` : renderEmpty(projectId ? "Vyber nahoře zakázku a klikni na konkrétního pracovníka." : "Vyber pracovníka filtrem nahoře nebo klikni na některý výkaz."))}
       </div>
+      ` : ""}
     </section>
   `;
 }
@@ -2483,10 +2799,192 @@ function renderLoginView() {
   `;
 }
 
+function isIosDevice() {
+  const ua = window.navigator.userAgent || "";
+  return /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+function isStandaloneMode() {
+  return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+}
+
+function getWorkerPortalTasks(workerId) {
+  return (state.tasks || [])
+    .filter((task) => {
+      const workerIds = task.worker_ids || [];
+      return task.assigned_worker_id === workerId || workerIds.includes(workerId);
+    })
+    .filter((task) => !["done", "archived"].includes(task.status))
+    .sort((a, b) => String(a.due_date || "9999").localeCompare(String(b.due_date || "9999")));
+}
+
+function getWorkerPortalProjects(workerId) {
+  const byRecentWork = [...(state.worklogs || [])]
+    .filter((item) => item.worker_id === workerId)
+    .sort((a, b) => String(b.work_date || "").localeCompare(String(a.work_date || "")))
+    .map((item) => item.project_id);
+  const byTasks = getWorkerPortalTasks(workerId).map((task) => task.project_id).filter(Boolean);
+  const ids = [...new Set([...byTasks, ...byRecentWork, ...(state.projects || []).map((item) => item.id)])];
+  return ids
+    .map((projectId) => state.projects.find((item) => item.id === projectId))
+    .filter(Boolean);
+}
+
+function getWorkerTodayTaskCards(workerId) {
+  const todayKey = toDateKey();
+  return getWorkerPortalTasks(workerId).filter((task) => toDateKey(task.due_date) === todayKey);
+}
+
+function renderWorkerPortalHome(workerId) {
+  const todayTasks = getWorkerTodayTaskCards(workerId);
+  const allTasks = getWorkerPortalTasks(workerId);
+  const visibleProjects = getWorkerPortalProjects(workerId).slice(0, 6);
+  const recentLogs = [...(state.worklogs || [])]
+    .filter((item) => item.worker_id === workerId)
+    .sort((a, b) => String(b.work_date || "").localeCompare(String(a.work_date || "")))
+    .slice(0, 5);
+  return `
+    ${renderSummaryStrip([
+      { label: "Dnešní úkoly", value: todayTasks.length },
+      { label: "Otevřené úkoly", value: allTasks.length },
+      { label: "Zakázky", value: getWorkerPortalProjects(workerId).length },
+      { label: "Neproplaceno", value: formatCurrency((state.worklogs || []).filter((item) => item.worker_id === workerId && item.payment_status !== "paid").reduce((sum, item) => sum + getWorklogPayoutAmount(item), 0)) },
+    ])}
+    <div class="worker-phone-grid">
+      <div class="panel panel-soft">
+        <div class="panel-header"><div><h3>Dnes</h3><p>To hlavní, co potřebuješ zapsat nebo nafotit.</p></div></div>
+        ${todayTasks.length ? `
+          <div class="worker-task-list">
+            ${todayTasks.map((task) => `
+              <div class="worker-task-card">
+                <div class="worker-task-head">
+                  <strong>${escapeHtml(task.title)}</strong>
+                  <span class="chip">${escapeHtml(getTaskStatusLabel(task.status))}</span>
+                </div>
+                <div class="worker-task-meta">${escapeHtml(getProjectName(task.project_id))}${task.due_date ? ` · ${escapeHtml(formatDate(task.due_date))}` : ""}</div>
+                <div class="worker-card-actions">
+                  <button type="button" class="button button-primary" data-worker-section="work" data-worker-project="${task.project_id || ""}">Zapsat práci</button>
+                  <button type="button" class="button button-secondary" data-worker-section="photo" data-worker-project="${task.project_id || ""}">Přidat fotku</button>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        ` : renderEmpty("Dnes tu nejsou žádné konkrétní úkoly. Práci můžeš zapsat ručně podle zakázky.") }
+      </div>
+      <div class="panel panel-soft">
+        <div class="panel-header"><div><h3>Rychlý výběr zakázek</h3><p>Klikni na zakázku a rovnou pokračuj do zápisu práce.</p></div></div>
+        <div class="worker-project-grid">
+          ${visibleProjects.map((project) => `
+            <button type="button" class="worker-project-tile" data-worker-section="work" data-worker-project="${project.id}">
+              <strong>${escapeHtml(project.name)}</strong>
+              <span>${escapeHtml(project.customer_name || project.address || "Zakázka")}</span>
+            </button>
+          `).join("")}
+        </div>
+      </div>
+      <div class="panel panel-soft">
+        <div class="panel-header"><div><h3>Poslední zapsaná práce</h3><p>Kontrola, co už odešlo do systému.</p></div></div>
+        ${renderDataTable(
+          ["Datum", "Zakázka", "Hodiny", "Stav"],
+          recentLogs.map((item) => `
+            <tr>
+              <td>${formatDate(item.work_date, false)}</td>
+              <td>${escapeHtml(getProjectName(item.project_id))}</td>
+              <td>${formatHours(item.hours)}</td>
+              <td>${escapeHtml(getPaymentStatusLabel(item.payment_status))}</td>
+            </tr>
+          `),
+          "Zatím bez zapsané práce.",
+        )}
+      </div>
+    </div>
+  `;
+}
+
+function renderWorkerPortalWorkForm(workerId) {
+  const selectedProjectId = state.workerPortalProjectId || "";
+  return `
+    <div class="panel">
+      <div class="panel-header"><div><h3>Zapsat práci</h3><p>Stačí vybrat zakázku, zadat hodiny a vedlejší výdaj.</p></div></div>
+      <form id="worker-portal-form" class="worker-mobile-form">
+        <input name="worker_id" type="hidden" value="${escapeHtml(workerId)}">
+        <select name="project_id" required>${renderProjectOptions(selectedProjectId || null)}</select>
+        <div class="row">
+          <input name="work_date" type="date" required value="${escapeHtml(toDateKey())}">
+          <input name="hours" type="text" inputmode="decimal" placeholder="Kolik hodin?" required>
+        </div>
+        <input name="material_cost" type="text" inputmode="decimal" placeholder="Vedlejší výdaj Kč" value="0">
+        <input name="rate" type="hidden" data-auto-rate="true">
+        <input name="payout_amount" type="text" inputmode="decimal" placeholder="K výplatě Kč" data-auto-payout="true" readonly>
+        <div class="field-note">Částka k výplatě se dopočítá sama podle tvé sazby a vedlejšího výdaje.</div>
+        <textarea name="notes" rows="3" placeholder="Poznámka k práci"></textarea>
+        <button class="button button-primary button-large" type="submit">Uložit práci</button>
+      </form>
+    </div>
+  `;
+}
+
+function renderWorkerPortalPhotoForm(workerId) {
+  const selectedProjectId = state.workerPortalProjectId || "";
+  return `
+    <div class="panel">
+      <div class="panel-header"><div><h3>Přidat fotku</h3><p>Vyfoť postup nebo hotovou práci a ulož ji k zakázce.</p></div></div>
+      <form id="worker-photo-form" class="worker-mobile-form">
+        <input name="worker_id" type="hidden" value="${escapeHtml(workerId)}">
+        <select name="project_id" required>${renderProjectOptions(selectedProjectId || null)}</select>
+        <div class="row">
+          <input name="work_date" type="date" value="${escapeHtml(toDateKey())}">
+          <input name="title" type="text" placeholder="Krátký popis fotky">
+        </div>
+        <input name="file" type="file" accept="image/*" capture="environment" required>
+        <button class="button button-primary button-large" type="submit">Nahrát fotografii</button>
+      </form>
+    </div>
+  `;
+}
+
 function renderApp() {
   if (!root) return;
   if (!state.currentUser) {
     root.innerHTML = normalizeCzechText(renderLoginView());
+    renderProjectDialog();
+    renderEmailDialog();
+    renderTaskDialog();
+    renderTaskFromEmailDialog();
+    renderPasswordDialog();
+    return;
+  }
+  if (state.currentUser.role === "worker") {
+    const workerId = state.currentUser.worker_id || "";
+    const installButton = !isStandaloneMode() ? `<button type="button" class="button button-secondary" data-worker-install>Instalovat do telefonu</button>` : "";
+    const section = state.workerPortalSection || "today";
+    let sectionBody = renderWorkerPortalHome(workerId);
+    if (section === "work") sectionBody = renderWorkerPortalWorkForm(workerId);
+    if (section === "photo") sectionBody = renderWorkerPortalPhotoForm(workerId);
+    root.innerHTML = normalizeCzechText(`
+      <div class="worker-app-shell">
+        <header class="worker-app-header">
+          <div>
+            <span class="brand-kicker">LB-AGENT</span>
+            <h2>${escapeHtml(state.currentUser.full_name || "Pracovník")}</h2>
+            <p>Dnešní práce, rychlý zápis hodin a fotky k zakázce.</p>
+          </div>
+          <div class="worker-header-actions">
+            ${installButton}
+            <button type="button" class="button button-secondary" data-open-password-dialog>Změnit heslo</button>
+            <button type="button" class="button button-secondary" data-logout>Odhlásit</button>
+          </div>
+        </header>
+        <main class="worker-app-main">
+          <div class="worker-section-tabs">
+            <button type="button" class="button ${section === "today" ? "button-primary" : "button-secondary"}" data-worker-section="today">Dnes</button>
+            <button type="button" class="button ${section === "work" ? "button-primary" : "button-secondary"}" data-worker-section="work">Zapsat práci</button>
+            <button type="button" class="button ${section === "photo" ? "button-primary" : "button-secondary"}" data-worker-section="photo">Přidat fotku</button>
+          </div>
+          ${sectionBody}
+        </main>
+      </div>
+    `);
     renderProjectDialog();
     renderEmailDialog();
     renderTaskDialog();
@@ -2543,6 +3041,7 @@ async function loadAll() {
     tasks: fetchJson("/api/tasks"),
     projects: fetchJson("/api/projects"),
     workers: fetchJson("/api/workers"),
+    projectWorkerRates: fetchJson("/api/project-worker-rates"),
     worklogs: fetchJson("/api/worklogs"),
     worklogSummary: fetchJson("/api/worklogs/summary"),
   };
@@ -2572,6 +3071,7 @@ async function loadAll() {
   state.projects = resolved.projects?.items || [];
   state.invoices = resolved.invoices?.items || [];
   state.workers = resolved.workers?.items || [];
+  state.projectWorkerRates = resolved.projectWorkerRates?.items || [];
   state.worklogs = resolved.worklogs?.items || [];
   state.worklogSummary = resolved.worklogSummary?.items || [];
 
@@ -2905,7 +3405,7 @@ async function submitTaskFromEmailForm(form) {
 async function submitProjectWorklogForm(form) {
   const projectId = Number(form.dataset.projectId);
   const formData = new FormData(form);
-  const workDate = String(formData.get("work_date") || "").trim();
+  const workDate = String(formData.get("work_date") || "").trim() || toDateKey();
   const notes = String(formData.get("notes") || "").trim();
   const rows = Array.from(form.querySelectorAll(".project-worklog-entry"));
   const payloads = rows
@@ -2952,6 +3452,29 @@ async function submitProjectWorklogForm(form) {
   state.projectSection = "worklogs";
   await loadAll();
   showMessage("ok", `Zapsány hodiny pro ${payloads.length} pracovníky.`);
+}
+
+async function submitProjectWorkerRatesForm(form) {
+  const projectId = Number(form.dataset.projectId);
+  const rows = state.workers
+    .filter((worker) => worker.status !== "inactive")
+    .map((worker) => {
+      const input = form.querySelector(`[name="project_rate_${worker.id}"]`);
+      const rawValue = input instanceof HTMLInputElement ? input.value.trim() : "";
+      return {
+        worker_id: worker.id,
+        payout_rate: rawValue ? parseDecimal(rawValue) : null,
+      };
+    });
+
+  await fetchJson(`/api/projects/${projectId}/worker-rates`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items: rows }),
+  });
+  await loadProjectDetail(projectId);
+  state.projectWorkerRates = await fetchJson("/api/project-worker-rates").then((result) => result.items || []);
+  showMessage("ok", "Sazby zakázky byly uloženy.");
 }
 
 async function submitWorkerForm(form) {
@@ -3093,8 +3616,9 @@ async function submitWorkerPortalForm(form) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+  state.workerPortalProjectId = payload.project_id;
+  state.workerPortalSection = "today";
   await loadAll();
-  showMessage("ok", "Práce byla zapsána.");
 }
 
 async function submitWorkerPhotoForm(form) {
@@ -3109,6 +3633,8 @@ async function submitWorkerPhotoForm(form) {
     method: "POST",
     body: formData,
   });
+  state.workerPortalProjectId = projectId;
+  state.workerPortalSection = "today";
   await loadAll();
   showMessage("ok", "Fotografie byla nahr?na do zak?zky.");
 }
@@ -3134,7 +3660,7 @@ function bindEvents() {
     if (rawTarget instanceof Element && rawTarget.closest("[data-worklog-paid-toggle]")) {
       return;
     }
-    const target = event.target.closest("[data-view], [data-refresh], [data-open-project-dialog], [data-open-task-dialog], [data-close-project-dialog], [data-close-email-dialog], [data-close-task-dialog], [data-select-item], [data-project-section], [data-email-action], [data-task-action], [data-task-email], [data-bulk-email-action], [data-bulk-task-action], [data-worklog-pay], [data-project-worklog-pay], [data-open-email], [data-open-task], [data-worklog-id], [data-worklog-summary], [data-conversation-assign], [data-create-project-from-email], [data-delete-email], [data-delete-task], [data-delete-project], [data-delete-worker], [data-delete-worklog], [data-delete-user], [data-logout], [data-open-password-dialog], [data-calendar-nav], [data-calendar-date], [data-calendar-mode]");
+    const target = event.target.closest("[data-view], [data-refresh], [data-open-project-dialog], [data-open-task-dialog], [data-close-project-dialog], [data-close-email-dialog], [data-close-task-dialog], [data-select-item], [data-project-section], [data-email-action], [data-task-action], [data-task-email], [data-bulk-email-action], [data-bulk-task-action], [data-worklog-pay], [data-project-worklog-pay], [data-open-email], [data-open-task], [data-worklog-id], [data-worklog-summary], [data-worklog-project-select], [data-worklog-worker-select], [data-worklog-view-mode], [data-conversation-assign], [data-create-project-from-email], [data-delete-email], [data-delete-task], [data-delete-project], [data-delete-worker], [data-delete-worklog], [data-delete-user], [data-logout], [data-open-password-dialog], [data-calendar-nav], [data-calendar-date], [data-calendar-mode], [data-worker-section], [data-worker-install]");
     if (!target) return;
     event.preventDefault();
 
@@ -3153,6 +3679,23 @@ function bindEvents() {
         await fetchJson("/api/auth/logout", { method: "POST" });
         state.currentUser = null;
         state.authReady = true;
+        renderApp();
+        return;
+      }
+      if (target.hasAttribute("data-worker-install")) {
+        if (deferredInstallPrompt) {
+          deferredInstallPrompt.prompt();
+          deferredInstallPrompt = null;
+        } else if (isIosDevice()) {
+          showMessage("ok", "Na iPhonu otevři Sdílet a zvol Na plochu. Potom se LB-AGENT bude chovat skoro jako aplikace.");
+        } else {
+          showMessage("ok", "V prohlížeči otevři nabídku a zvol Přidat na plochu nebo Instalovat aplikaci.");
+        }
+        return;
+      }
+      if (target.dataset.workerSection) {
+        state.workerPortalSection = target.dataset.workerSection;
+        state.workerPortalProjectId = target.dataset.workerProject ? Number(target.dataset.workerProject) || null : state.workerPortalProjectId;
         renderApp();
         return;
       }
@@ -3337,6 +3880,30 @@ function bindEvents() {
         renderApp();
         return;
       }
+      if (target.dataset.worklogProjectSelect) {
+        state.worklogViewMode = "projects";
+        state.worklogProjectFilter = target.dataset.worklogProjectSelect;
+        state.selectedWorklogSummaryKey = null;
+        renderApp();
+        return;
+      }
+      if (target.dataset.worklogWorkerSelect) {
+        state.worklogViewMode = "workers";
+        state.worklogWorkerFilter = target.dataset.worklogWorkerSelect;
+        state.selectedWorklogSummaryKey = null;
+        renderApp();
+        return;
+      }
+      if (target.dataset.worklogViewMode) {
+        state.worklogViewMode = target.dataset.worklogViewMode;
+        state.selectedWorklogSummaryKey = null;
+        if (state.worklogViewMode === "overview") {
+          state.worklogProjectFilter = "";
+          state.worklogWorkerFilter = "";
+        }
+        renderApp();
+        return;
+      }
       if (target.dataset.conversationAssign) {
         const emailIds = target.dataset.conversationAssign.split(",").filter(Boolean);
         const projectId = Number(document.querySelector("#conversation-project-select")?.value || 0) || null;
@@ -3447,7 +4014,7 @@ function bindEvents() {
       updateProjectWorklogRowPayout(row, true);
       return;
     }
-    if (target.matches('#worker-portal-form [name="worker_id"], #worker-portal-form [name="hours"], #worker-portal-form [name="rate"], #worker-portal-form [name="material_cost"]')) {
+    if (target.matches('#worker-portal-form [name="worker_id"], #worker-portal-form [name="project_id"], #worker-portal-form [name="hours"], #worker-portal-form [name="rate"], #worker-portal-form [name="material_cost"]')) {
       if (target.matches('#worker-portal-form [name="rate"]')) {
         target.dataset.autoRate = target.value ?"false" : "true";
       }
@@ -3498,6 +4065,7 @@ function bindEvents() {
       state.worklogPaymentFilter = target.value;
       state.selectedWorklogSummaryKey = null;
       renderApp();
+      return;
     }
   });
 
@@ -3516,7 +4084,7 @@ function bindEvents() {
       target.dataset.autoPayout = target.value ?"false" : "true";
       return;
     }
-    if (target.matches('#worker-portal-form [name="hours"], #worker-portal-form [name="rate"], #worker-portal-form [name="material_cost"]')) {
+    if (target.matches('#worker-portal-form [name="project_id"], #worker-portal-form [name="hours"], #worker-portal-form [name="rate"], #worker-portal-form [name="material_cost"]')) {
       if (target.matches('#worker-portal-form [name="rate"]')) {
         target.dataset.autoRate = target.value ?"false" : "true";
       }
@@ -3550,6 +4118,7 @@ function bindEvents() {
         setProjectAutosaveStatus("saved");
         return;
       }
+      if (form.id === "project-worker-rates-form") return await submitProjectWorkerRatesForm(form);
       if (form.id === "project-document-form") return await submitProjectDocumentForm(form);
       if (form.id === "task-form") return await submitTaskForm(form);
       if (form.id === "task-update-form") return await submitTaskUpdateForm(form);
@@ -3570,6 +4139,16 @@ function bindEvents() {
 }
 
 async function boot() {
+  window.addEventListener("beforeinstallprompt", (event) => {
+    event.preventDefault();
+    deferredInstallPrompt = event;
+    if (state.currentUser?.role === "worker") renderApp();
+  });
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    });
+  }
   bindEvents();
   renderApp();
   try {
