@@ -20,7 +20,7 @@ systemctl is-active lb-agent-worker
 } else {
   @"
 sudo systemctl disable --now lb-agent-worker >/dev/null 2>&1 || true
-echo "lb-agent-worker disabled; run deploy_vm.ps1 -EnableWorker after Gmail OAuth is valid."
+echo 'lb-agent-worker disabled. Run deploy_vm.ps1 -EnableWorker after Gmail OAuth is valid.'
 "@
 }
 
