@@ -178,6 +178,7 @@ def _serialize_email(config: AppConfig, item: Any, *, include_body: bool = True)
     if not include_body:
         payload.pop("body", None)
         payload["body_preview"] = (item.summary or item.body or "")[:240]
+    payload["ai_triage"] = payload.pop("ai_payload", {}) or {}
     project_ids = crud.list_email_project_ids(config, item.id)
     projects = []
     for project_id in project_ids:

@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS emails (
     status TEXT NOT NULL DEFAULT 'new',
     attachments_json TEXT NOT NULL DEFAULT '[]',
     summary TEXT NOT NULL DEFAULT '',
+    ai_payload_json TEXT NOT NULL DEFAULT '{}',
     project_id INTEGER
 );
 """
@@ -397,6 +398,7 @@ def initialize_database(config: AppConfig) -> None:
         _ensure_column(connection, "tasks", "completed_at", "TEXT")
         _ensure_column(connection, "tasks", "completed_by_user_id", "INTEGER")
         _ensure_column(connection, "emails", "project_id", "INTEGER")
+        _ensure_column(connection, "emails", "ai_payload_json", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(
             connection,
             "invoices",

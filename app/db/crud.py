@@ -188,15 +188,20 @@ def list_reminders(config: AppConfig) -> Sequence[ReminderModel]:
     ]
 
 
-def create_email(config: AppConfig, email: Email, summary: str = "") -> str:
+def create_email(
+    config: AppConfig,
+    email: Email,
+    summary: str = "",
+    ai_payload: dict | None = None,
+) -> str:
     with get_connection(config.db_path) as connection:
         connection.execute(
             """
             INSERT OR REPLACE INTO emails (
                 id, thread_id, sender, subject, body, received_at,
-                category, priority, status, attachments_json, summary, project_id
+                category, priority, status, attachments_json, summary, ai_payload_json, project_id
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 email.id,
@@ -210,6 +215,7 @@ def create_email(config: AppConfig, email: Email, summary: str = "") -> str:
                 "processed",
                 json.dumps(email.attachments, ensure_ascii=True),
                 summary,
+                json.dumps(ai_payload or {}, ensure_ascii=True),
                 email.project_id,
             ),
         )
@@ -230,7 +236,7 @@ def list_emails(config: AppConfig) -> Sequence[EmailModel]:
         rows = connection.execute(
             """
             SELECT id, thread_id, sender, subject, body, received_at,
-                   category, priority, status, attachments_json, summary, project_id
+                   category, priority, status, attachments_json, summary, ai_payload_json, project_id
             FROM emails
             ORDER BY received_at DESC
             """
@@ -249,6 +255,7 @@ def list_emails(config: AppConfig) -> Sequence[EmailModel]:
             status=row["status"],
             attachments=json.loads(row["attachments_json"] or "[]"),
             summary=row["summary"],
+            ai_payload=json.loads(row["ai_payload_json"] or "{}"),
             project_id=row["project_id"],
         )
         for row in rows
@@ -260,7 +267,7 @@ def get_email(config: AppConfig, email_id: str) -> EmailModel | None:
         row = connection.execute(
             """
             SELECT id, thread_id, sender, subject, body, received_at,
-                   category, priority, status, attachments_json, summary, project_id
+                   category, priority, status, attachments_json, summary, ai_payload_json, project_id
             FROM emails
             WHERE id = ?
             """,
@@ -282,8 +289,23 @@ def get_email(config: AppConfig, email_id: str) -> EmailModel | None:
         status=row["status"],
         attachments=json.loads(row["attachments_json"] or "[]"),
         summary=row["summary"],
+        ai_payload=json.loads(row["ai_payload_json"] or "{}"),
         project_id=row["project_id"],
     )
+
+
+def update_email_ai_payload(config: AppConfig, email_id: str, ai_payload: dict) -> bool:
+    with get_connection(config.db_path) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE emails
+            SET ai_payload_json = ?
+            WHERE id = ?
+            """,
+            (json.dumps(ai_payload, ensure_ascii=True), email_id),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
 
 
 def create_invoice(config: AppConfig, invoice: Invoice) -> int:

@@ -410,6 +410,42 @@ class TestWebApi(unittest.TestCase):
         self.assertEqual(detail_response.status_code, 200)
         self.assertIn("Plny text e-mailu", detail_response.json()["item"]["body"])
 
+    def test_email_detail_returns_ai_triage_payload(self) -> None:
+        crud.create_email(
+            self.config,
+            Email(
+                id="email-ai-1",
+                thread_id="thread-ai-1",
+                sender="zakaznik@example.com",
+                subject="Naplanovat termin",
+                body="Muzeme se sejit 2026-04-25 v 10:00?",
+                received_at="2026-04-17T09:00:00+00:00",
+            ),
+            summary="Navrh schuzky",
+            ai_payload={
+                "classification": {
+                    "category": "calendar",
+                    "action": "create_calendar_event",
+                    "priority": "high",
+                    "needs_reply": True,
+                    "confidence": 0.88,
+                },
+                "parsed_email": {
+                    "summary": "Zakaznik navrhuje termin schuzky.",
+                    "requested_deadline": "2026-04-25T10:00:00",
+                    "requested_action": "potvrdit termin schuzky",
+                    "suggested_actions": ["zapsat termin", "odeslat potvrzeni"],
+                    "draft_reply": "Termin 25. 4. v 10:00 potvrzuji.",
+                },
+            },
+        )
+
+        detail_response = self.client.get("/api/emails/email-ai-1")
+        self.assertEqual(detail_response.status_code, 200)
+        payload = detail_response.json()["item"]["ai_triage"]
+        self.assertEqual(payload["classification"]["action"], "create_calendar_event")
+        self.assertEqual(payload["parsed_email"]["requested_deadline"], "2026-04-25T10:00:00")
+
     def test_project_photo_upload_keeps_worker_and_work_date(self) -> None:
         worker_response = self.client.post(
             "/api/workers",

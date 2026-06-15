@@ -827,6 +827,48 @@ function renderSummaryStrip(cards) {
   `;
 }
 
+function buildAiActionLabel(action) {
+  const labels = {
+    monitor_only: "Jen sledovat",
+    create_task: "Vytvorit ukol",
+    create_invoice: "Zaregistrovat fakturu",
+    create_calendar_event: "Zapsat termin",
+    draft_email_reply: "Navrhnout odpoved",
+    create_project: "Vytvorit zakazku",
+  };
+  return labels[action] || action || "-";
+}
+
+function getEmailAiSuggestion(email) {
+  return email?.ai_triage || {};
+}
+
+async function copyTextToClipboard(text, successMessage = "Text byl zkopirovan.") {
+  if (!text) {
+    showMessage("error", "Neni co kopirovat.");
+    return;
+  }
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    showMessage("ok", successMessage);
+    return;
+  }
+  showMessage("info", text);
+}
+
+function openDraftReply(email) {
+  const ai = getEmailAiSuggestion(email);
+  const parsed = ai.parsed_email || {};
+  const draftReply = parsed.draft_reply || "";
+  if (!draftReply.trim()) {
+    showMessage("error", "AI navrh odpovedi pro tento e-mail neni k dispozici.");
+    return;
+  }
+  const recipient = String(email.sender || "").match(/<([^>]+)>/)?.[1] || String(email.sender || "").trim();
+  const mailto = `mailto:${encodeURIComponent(recipient)}?subject=${encodeURIComponent(`Re: ${email.subject || ""}`)}&body=${encodeURIComponent(draftReply)}`;
+  window.location.href = mailto;
+}
+
 function renderEmpty(text) {
   return `<div class="empty-state">${escapeHtml(text)}</div>`;
 }
@@ -1241,6 +1283,32 @@ function renderEmailDetail(email) {
   if (!email) return renderEmpty("Vyber e-mail ze seznamu.");
   const body = email.body ?? email.body_preview ?? "";
   const hasFullBody = typeof email.body === "string";
+  const ai = getEmailAiSuggestion(email);
+  const classification = ai.classification || {};
+  const parsed = ai.parsed_email || {};
+  const aiCards = [
+    { label: "Doporucena akce", value: buildAiActionLabel(classification.action) },
+    { label: "Duvěra", value: classification.confidence != null ? `${Math.round(Number(classification.confidence || 0) * 100)} %` : "-" },
+    { label: "Priorita", value: getPriorityLabel(classification.priority || email.priority) },
+    { label: "Termin", value: parsed.requested_deadline ? formatDate(parsed.requested_deadline, true) : "-" },
+  ];
+  const aiSuggestedActions = Array.isArray(parsed.suggested_actions) ? parsed.suggested_actions.filter(Boolean) : [];
+  const aiActionButtons = [];
+  if (classification.action === "create_task") {
+    aiActionButtons.push(`<button type="button" class="button button-primary" data-email-action="create_task" data-email-id="${escapeHtml(email.id)}">Potvrdit navrh ukolu</button>`);
+  }
+  if (classification.action === "create_invoice") {
+    aiActionButtons.push(`<button type="button" class="button button-primary" data-email-action="create_invoice" data-email-id="${escapeHtml(email.id)}">Potvrdit navrh faktury</button>`);
+  }
+  if (classification.action === "create_calendar_event") {
+    aiActionButtons.push(`<button type="button" class="button button-primary" data-email-action="create_calendar_event" data-email-id="${escapeHtml(email.id)}">Potvrdit navrh terminu</button>`);
+  }
+  if (classification.action === "draft_email_reply" && parsed.draft_reply) {
+    aiActionButtons.push(`<button type="button" class="button button-primary" data-ai-open-reply="${escapeHtml(email.id)}">Otevrit draft odpovedi</button>`);
+  }
+  if (parsed.draft_reply) {
+    aiActionButtons.push(`<button type="button" class="button button-secondary" data-ai-copy-reply="${escapeHtml(email.id)}">Kopirovat odpoved</button>`);
+  }
   const assignedProjects = email.projects?.length
     ?email.projects.map((project) => `<span class="chip">${escapeHtml(project.name)}</span>`).join("")
     : `<span class="selection-chip">Bez pĹ™iĹ™azenĂ© zakĂˇzky</span>`;
@@ -1283,6 +1351,28 @@ function renderEmailDetail(email) {
         <div class="detail-item"><span class="detail-item-label">Kategorie</span><span class="detail-item-value">${escapeHtml(getEmailCategoryLabel(email.category))}</span></div>
         <div class="detail-item"><span class="detail-item-label">ZakĂˇzek</span><span class="detail-item-value">${email.projects?.length || 0}</span></div>
       </div>
+      ${Object.keys(ai).length ? `
+        <div class="section-card ai-proposal-card">
+          <div class="panel-header"><div><h4>AI navrh</h4><p>${escapeHtml(parsed.summary || email.summary || "Navrh z automaticke triage e-mailu.")}</p></div></div>
+          ${renderSummaryStrip(aiCards)}
+          <div class="detail-grid ai-detail-grid">
+            <div class="detail-item"><span class="detail-item-label">Kategorie</span><span class="detail-item-value">${escapeHtml(getEmailCategoryLabel(classification.category || email.category))}</span></div>
+            <div class="detail-item"><span class="detail-item-label">Odpoved potreba</span><span class="detail-item-value">${classification.needs_reply ? "Ano" : "Ne"}</span></div>
+            <div class="detail-item"><span class="detail-item-label">Kontakt</span><span class="detail-item-value">${escapeHtml(parsed.contact || parsed.company_name || "-")}</span></div>
+            <div class="detail-item"><span class="detail-item-label">Adresa</span><span class="detail-item-value">${escapeHtml(parsed.address || "-")}</span></div>
+            <div class="detail-item"><span class="detail-item-label">Pozadovana cinnost</span><span class="detail-item-value">${escapeHtml(parsed.requested_action || "-")}</span></div>
+            <div class="detail-item"><span class="detail-item-label">Faktura</span><span class="detail-item-value">${escapeHtml(parsed.invoice_number || "-")}</span></div>
+          </div>
+          ${aiSuggestedActions.length ? `<div class="toolbar">${aiSuggestedActions.map((item) => `<span class="chip">${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+          ${aiActionButtons.length ? `<div class="toolbar">${aiActionButtons.join("")}</div>` : ""}
+          ${parsed.draft_reply ? `
+            <div class="ai-inline-card">
+              <div class="panel-header"><div><h4>Navrh odpovedi</h4></div></div>
+              <pre class="text-block">${escapeHtml(parsed.draft_reply)}</pre>
+            </div>
+          ` : ""}
+        </div>
+      ` : ""}
       <div class="section-card">
         <div class="panel-header"><div><h4>PĹ™Ă­lohy</h4></div></div>
         <div class="toolbar">${attachments}</div>
@@ -2706,6 +2796,12 @@ function renderTaskFromEmailDialog() {
   }
 
   const defaultProjectId = email.project_ids?.[0] || email.project_id || null;
+  const ai = getEmailAiSuggestion(email);
+  const classification = ai.classification || {};
+  const parsed = ai.parsed_email || {};
+  const defaultTitle = parsed.requested_action || email.subject || "";
+  const defaultDescription = parsed.summary || parsed.draft_reply || email.body || "";
+  const defaultDueDate = toDateTimeLocal(parsed.requested_deadline || "");
   taskFromEmailDialog.innerHTML = normalizeCzechText(`
     <div class="modal-card">
       <div class="modal-header">
@@ -2717,18 +2813,18 @@ function renderTaskFromEmailDialog() {
       </div>
       <form id="task-from-email-form" class="dialog-form" data-email-id="${escapeHtml(email.id)}">
         <div class="row">
-          <input name="title" value="${escapeHtml(email.subject || "")}" placeholder="Název úkolu" required>
-          <select name="priority">${renderPriorityOptions(email.priority || "normal")}</select>
+          <input name="title" value="${escapeHtml(defaultTitle)}" placeholder="Název úkolu" required>
+          <select name="priority">${renderPriorityOptions(classification.priority || email.priority || "normal")}</select>
         </div>
         <div class="row">
-          <input name="due_date" type="datetime-local" placeholder="Termín splnění">
+          <input name="due_date" type="datetime-local" placeholder="Termín splnění" value="${escapeHtml(defaultDueDate)}">
           <select name="project_id">${renderProjectOptions(defaultProjectId)}</select>
         </div>
         <div class="row">
           <select name="assigned_worker_ids" multiple size="4">${renderWorkerMultiOptions()}</select>
           <input name="estimated_hours" type="number" step="0.5" min="0" placeholder="Odhad hodin">
         </div>
-        <textarea name="description" rows="8" placeholder="Popis úkolu">${escapeHtml(email.body || "")}</textarea>
+        <textarea name="description" rows="8" placeholder="Popis úkolu">${escapeHtml(defaultDescription)}</textarea>
         <div class="modal-actions">
           <button class="button button-secondary" type="button" data-close-task-from-email-dialog>Zrušit</button>
           <button class="button button-primary" type="submit">Vytvořit úkol</button>
@@ -3962,6 +4058,16 @@ function bindEvents() {
         await loadEmailDetail(state.modalEmailId);
         renderEmailDialog();
         emailDialog?.showModal();
+        return;
+      }
+      if (target.dataset.aiCopyReply) {
+        const email = findEmailById(target.dataset.aiCopyReply);
+        await copyTextToClipboard(email?.ai_triage?.parsed_email?.draft_reply || "", "Navrh odpovedi byl zkopirovan.");
+        return;
+      }
+      if (target.dataset.aiOpenReply) {
+        const email = findEmailById(target.dataset.aiOpenReply);
+        openDraftReply(email);
         return;
       }
       if (target.dataset.openTask) {

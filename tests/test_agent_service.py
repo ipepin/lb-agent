@@ -79,6 +79,8 @@ class TestAgentService(unittest.TestCase):
         self.assertEqual(len(stored_emails), 1)
         self.assertEqual(stored_emails[0].category, "uncategorized")
         self.assertEqual(stored_emails[0].summary, "Company: ACME s.r.o. Splatnost: 2026-04-30")
+        self.assertEqual(stored_emails[0].ai_payload["classification"]["action"], "create_invoice")
+        self.assertIn("parsed_email", stored_emails[0].ai_payload)
         self.assertEqual(result.approval_ids, [])
         self.assertEqual(result.reminder_ids, [])
 

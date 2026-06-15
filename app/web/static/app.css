@@ -1126,6 +1126,25 @@ a {
   cursor: pointer;
 }
 
+.ai-proposal-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-color: rgba(15, 118, 100, 0.25);
+  background: linear-gradient(180deg, rgba(15, 118, 100, 0.05) 0%, var(--surface-soft) 100%);
+}
+
+.ai-detail-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.ai-inline-card {
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
 .data-table tr.is-selected-row td {
   background: var(--accent-soft);
 }

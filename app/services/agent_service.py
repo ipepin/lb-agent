@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from dataclasses import asdict
 from typing import Callable
 
 from app.config import AppConfig
@@ -35,7 +36,12 @@ class AgentService:
         classification, parsed_email = self.ai_triage_service.analyze_email(email)
         email.category = "uncategorized"
         email.priority = classification.priority or "normal"
-        crud.create_email(self.config, email, summary=parsed_email.summary)
+        ai_payload = {
+            "classification": asdict(classification),
+            "parsed_email": asdict(parsed_email),
+            "generated_at": utc_now_iso(),
+        }
+        crud.create_email(self.config, email, summary=parsed_email.summary, ai_payload=ai_payload)
 
         return EmailProcessingResult(
             email=email,

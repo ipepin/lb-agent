@@ -48,6 +48,7 @@ class EmailModel:
     attachments: list[str]
     summary: str
     project_id: int | None
+    ai_payload: dict[str, Any]
 
 
 @dataclass(slots=True)
