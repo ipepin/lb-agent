@@ -1,9 +1,9 @@
-const CACHE_NAME = "lb-agent-v1";
+const CACHE_NAME = "lb-agent-v2";
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",
-  "/static/app.css?v=20260502a",
-  "/static/app.js?v=20260502a",
+  "/static/app.css?v=20260615b",
+  "/static/app.js?v=20260615b",
   "/static/lb-agent-icon.svg",
 ];
 
