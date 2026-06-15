@@ -12,6 +12,9 @@ class TaskModel:
     priority: str
     status: str
     due_date: str | None
+    deadline_at: str | None
+    planned_start_at: str | None
+    planned_end_at: str | None
     source_email_id: str | None
     project_id: int | None
     assigned_worker_id: int | None

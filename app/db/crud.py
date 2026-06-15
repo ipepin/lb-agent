@@ -43,10 +43,11 @@ def create_task(config: AppConfig, task: Task) -> int:
         cursor = connection.execute(
             """
             INSERT INTO tasks (
-                title, description, priority, status, due_date, source_email_id, project_id,
-                assigned_worker_id, estimated_hours, completed_at, completed_by_user_id, created_at
+                title, description, priority, status, due_date, deadline_at, planned_start_at,
+                planned_end_at, source_email_id, project_id, assigned_worker_id, estimated_hours,
+                completed_at, completed_by_user_id, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task.title,
@@ -54,6 +55,9 @@ def create_task(config: AppConfig, task: Task) -> int:
                 task.priority,
                 task.status,
                 task.due_date,
+                task.deadline_at or task.due_date,
+                task.planned_start_at,
+                task.planned_end_at,
                 task.source_email_id,
                 task.project_id,
                 task.assigned_worker_id,
@@ -107,8 +111,9 @@ def list_tasks(config: AppConfig) -> Sequence[TaskModel]:
     with get_connection(config.db_path) as connection:
         rows = connection.execute(
             """
-            SELECT id, title, description, priority, status, due_date, source_email_id,
-                   project_id, assigned_worker_id, estimated_hours, completed_at, completed_by_user_id, created_at
+            SELECT id, title, description, priority, status, due_date, deadline_at, planned_start_at,
+                   planned_end_at, source_email_id, project_id, assigned_worker_id, estimated_hours,
+                   completed_at, completed_by_user_id, created_at
             FROM tasks
             ORDER BY created_at DESC
             """
@@ -124,6 +129,9 @@ def list_tasks(config: AppConfig) -> Sequence[TaskModel]:
             priority=row["priority"],
             status=row["status"],
             due_date=row["due_date"],
+            deadline_at=row["deadline_at"] or row["due_date"],
+            planned_start_at=row["planned_start_at"],
+            planned_end_at=row["planned_end_at"],
             source_email_id=row["source_email_id"],
             project_id=row["project_id"],
             assigned_worker_id=row["assigned_worker_id"],
@@ -672,6 +680,9 @@ def update_task(
     priority: str,
     status: str,
     due_date: str | None,
+    deadline_at: str | None,
+    planned_start_at: str | None,
+    planned_end_at: str | None,
     project_id: int | None,
     assigned_worker_id: int | None,
     estimated_hours: float | None,
@@ -681,8 +692,9 @@ def update_task(
         cursor = connection.execute(
             """
             UPDATE tasks
-            SET title = ?, description = ?, priority = ?, status = ?, due_date = ?, project_id = ?,
-                assigned_worker_id = ?, estimated_hours = ?,
+            SET title = ?, description = ?, priority = ?, status = ?, due_date = ?, deadline_at = ?,
+                planned_start_at = ?, planned_end_at = ?, project_id = ?, assigned_worker_id = ?,
+                estimated_hours = ?,
                 completed_at = CASE
                     WHEN ? = 'done' THEN ?
                     WHEN ? IN ('pending', 'waiting', 'planned', 'in_progress', 'scheduled') THEN NULL
@@ -701,6 +713,9 @@ def update_task(
                 priority,
                 status,
                 due_date,
+                deadline_at or due_date,
+                planned_start_at,
+                planned_end_at,
                 project_id,
                 assigned_worker_id,
                 estimated_hours,

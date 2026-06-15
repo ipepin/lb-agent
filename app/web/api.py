@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -99,6 +100,9 @@ class EmailActionPayload(BaseModel):
     title: str | None = None
     description: str | None = None
     due_date: str | None = None
+    deadline_at: str | None = None
+    planned_start_at: str | None = None
+    planned_end_at: str | None = None
     priority: str | None = None
     assigned_worker_id: int | None = None
     assigned_worker_ids: list[int] = []
@@ -127,6 +131,9 @@ class ProjectTaskCreatePayload(BaseModel):
     description: str = ""
     status: str = "pending"
     due_date: str | None = None
+    deadline_at: str | None = None
+    planned_start_at: str | None = None
+    planned_end_at: str | None = None
     priority: str = "normal"
     assigned_worker_id: int | None = None
     assigned_worker_ids: list[int] = []
@@ -220,6 +227,9 @@ def _record_email_user_decision(
         "title": (payload.title or "").strip() or None,
         "description": (payload.description or "").strip() or None,
         "due_date": (payload.due_date or "").strip() or None,
+        "deadline_at": (payload.deadline_at or "").strip() or (payload.due_date or "").strip() or None,
+        "planned_start_at": (payload.planned_start_at or "").strip() or None,
+        "planned_end_at": (payload.planned_end_at or "").strip() or None,
         "priority": (payload.priority or "").strip() or None,
         "assigned_worker_id": payload.assigned_worker_id,
         "assigned_worker_ids": list(payload.assigned_worker_ids or []),
@@ -245,8 +255,37 @@ def _serialize_document(item: Any) -> dict[str, Any]:
     return payload
 
 
+def _task_deadline(task: Any) -> str | None:
+    return (getattr(task, "deadline_at", None) or getattr(task, "due_date", None) or None)
+
+
+def _task_schedule_bounds(task: Any) -> tuple[str | None, str | None]:
+    planned_start = getattr(task, "planned_start_at", None) or None
+    planned_end = getattr(task, "planned_end_at", None) or None
+    return planned_start, planned_end
+
+
+def _event_end_from_start(starts_at: str, estimated_hours: float | None) -> str:
+    duration_hours = estimated_hours if estimated_hours and estimated_hours > 0 else 1.0
+    start_dt = datetime.fromisoformat(starts_at.replace("Z", "+00:00"))
+    end_dt = start_dt + timedelta(hours=duration_hours)
+    return end_dt.isoformat(timespec="minutes")
+
+
+def _resolve_task_event_window(task: Any) -> tuple[str, str]:
+    starts_at = getattr(task, "planned_start_at", None) or _task_deadline(task)
+    if not starts_at:
+        raise HTTPException(status_code=400, detail="Úkol nemá naplánovaný začátek ani termín.")
+    ends_at = getattr(task, "planned_end_at", None) or None
+    if not ends_at:
+        ends_at = _event_end_from_start(starts_at, getattr(task, "estimated_hours", None))
+    return starts_at, ends_at
+
+
 def _serialize_task(config: AppConfig, item: Any) -> dict[str, Any]:
     payload = asdict(item)
+    payload["deadline_at"] = _task_deadline(item)
+    payload["due_date"] = payload["deadline_at"]
     worker_ids = payload.get("worker_ids") or []
     workers = []
     for worker_id in worker_ids:
@@ -292,13 +331,24 @@ def _serialize_task(config: AppConfig, item: Any) -> dict[str, Any]:
                 "details": source_email.subject,
             }
         )
-    if item.due_date:
+    deadline_at = _task_deadline(item)
+    if deadline_at:
         timeline.append(
             {
-                "at": item.due_date,
+                "at": deadline_at,
                 "kind": "deadline",
                 "title": "Termín úkolu",
-                "details": item.due_date,
+                "details": deadline_at,
+            }
+        )
+    planned_start, planned_end = _task_schedule_bounds(item)
+    if planned_start:
+        timeline.append(
+            {
+                "at": planned_start,
+                "kind": "schedule",
+                "title": "Plán práce",
+                "details": planned_start if not planned_end else f"{planned_start} -> {planned_end}",
             }
         )
     if item.completed_at:
@@ -784,6 +834,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             status=payload.status,
             priority=payload.priority,
             due_date=payload.due_date,
+            deadline_at=payload.deadline_at,
+            planned_start_at=payload.planned_start_at,
+            planned_end_at=payload.planned_end_at,
             source_email_id=payload.source_email_id,
             project_id=payload.project_id,
             assigned_worker_id=payload.assigned_worker_id,
@@ -808,6 +861,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             status=payload.status,
             priority=payload.priority,
             due_date=payload.due_date,
+            deadline_at=payload.deadline_at,
+            planned_start_at=payload.planned_start_at,
+            planned_end_at=payload.planned_end_at,
             project_id=payload.project_id,
             assigned_worker_id=payload.assigned_worker_id,
             assigned_worker_ids=payload.assigned_worker_ids,
@@ -866,6 +922,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 description=(payload.description or "").strip() or parsed.summary or email.body[:500],
                 priority=(payload.priority or "").strip() or email.priority,
                 due_date=(payload.due_date or "").strip() or parsed.requested_deadline,
+                deadline_at=(payload.deadline_at or "").strip() or (payload.due_date or "").strip() or parsed.requested_deadline,
+                planned_start_at=(payload.planned_start_at or "").strip() or None,
+                planned_end_at=(payload.planned_end_at or "").strip() or None,
                 source_email_id=email.id,
                 project_id=payload.project_id if payload.project_id is not None else email.project_id,
                 assigned_worker_id=payload.assigned_worker_id,
@@ -1090,8 +1149,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             return {"status": "ok", "action": payload.action, "project_id": payload.project_id}
 
         if payload.action == "create_calendar_event":
-            if not task.due_date:
-                raise HTTPException(status_code=400, detail="Úkol nemá zadaný termín.")
+            starts_at, ends_at = _resolve_task_event_window(task)
             project = (
                 project_service.get_project(task.project_id)
                 if task.project_id is not None
@@ -1117,8 +1175,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                     item for item in crud.list_calendar_events(active_config)
                     if item.task_id == task_id
                     and (item.title or "") == event_title
-                    and (item.starts_at or "") == (task.due_date or "")
-                    and (item.ends_at or item.starts_at or "") == (task.due_date or "")
+                    and (item.starts_at or "") == starts_at
+                    and (item.ends_at or item.starts_at or "") == ends_at
                 ),
                 None,
             )
@@ -1135,8 +1193,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 }
             event_id = calendar_service.create_event_proposal(
                 title=event_title,
-                starts_at=task.due_date,
-                ends_at=task.due_date,
+                starts_at=starts_at,
+                ends_at=ends_at,
                 description=task.description,
                 location=project.address if project is not None else "",
                 priority=task.priority,
@@ -1279,6 +1337,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             status=payload.status,
             priority=payload.priority,
             due_date=payload.due_date,
+            deadline_at=payload.deadline_at,
+            planned_start_at=payload.planned_start_at,
+            planned_end_at=payload.planned_end_at,
             project_id=project_id,
             assigned_worker_id=payload.assigned_worker_id,
             assigned_worker_ids=payload.assigned_worker_ids,

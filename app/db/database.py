@@ -16,6 +16,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     priority TEXT NOT NULL DEFAULT 'normal',
     status TEXT NOT NULL DEFAULT 'pending',
     due_date TEXT,
+    deadline_at TEXT,
+    planned_start_at TEXT,
+    planned_end_at TEXT,
     source_email_id TEXT,
     project_id INTEGER,
     assigned_worker_id INTEGER,
@@ -305,7 +308,7 @@ def _repair_calendar_event_links(connection: sqlite3.Connection) -> None:
 
     tasks = connection.execute(
         """
-        SELECT id, title, due_date, project_id, assigned_worker_id
+        SELECT id, title, due_date, deadline_at, planned_start_at, project_id, assigned_worker_id
         FROM tasks
         """
     ).fetchall()
@@ -338,7 +341,8 @@ def _repair_calendar_event_links(connection: sqlite3.Connection) -> None:
             if (task["title"] or "").strip() != normalized_title:
                 continue
             score = 0
-            if (task["due_date"] or "").strip() == starts_at:
+            task_start = (task["planned_start_at"] or task["due_date"] or task["deadline_at"] or "").strip()
+            if task_start == starts_at:
                 score += 5
             if prefixed_project_id is not None and task["project_id"] == prefixed_project_id:
                 score += 4
@@ -391,6 +395,9 @@ def initialize_database(config: AppConfig) -> None:
         connection.execute(PROJECT_DOCUMENTS_TABLE_SQL)
         connection.execute(PROJECT_TIMELINE_EVENTS_TABLE_SQL)
         _ensure_column(connection, "tasks", "priority", "TEXT NOT NULL DEFAULT 'normal'")
+        _ensure_column(connection, "tasks", "deadline_at", "TEXT")
+        _ensure_column(connection, "tasks", "planned_start_at", "TEXT")
+        _ensure_column(connection, "tasks", "planned_end_at", "TEXT")
         _ensure_column(connection, "tasks", "source_email_id", "TEXT")
         _ensure_column(connection, "tasks", "project_id", "INTEGER")
         _ensure_column(connection, "tasks", "assigned_worker_id", "INTEGER")

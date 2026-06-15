@@ -45,6 +45,7 @@ class ApprovalService:
                         "description": parsed_email.summary,
                         "priority": classification.priority,
                         "due_date": parsed_email.requested_deadline or "",
+                        "deadline_at": parsed_email.requested_deadline or "",
                         "suggested_actions": parsed_email.suggested_actions,
                     },
                     source_email_id=email.id,
@@ -155,6 +156,7 @@ class ApprovalService:
                 description=str(payload.get("description", "")),
                 priority=str(payload.get("priority", "normal")),
                 due_date=self._none_if_blank(payload.get("due_date")),
+                deadline_at=self._none_if_blank(payload.get("deadline_at")) or self._none_if_blank(payload.get("due_date")),
                 source_email_id=item.source_email_id,
                 project_id=project_id,
             )

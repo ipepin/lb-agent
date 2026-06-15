@@ -253,6 +253,22 @@ function toDateKey(value = null) {
   return `${year}-${month}-${day}`;
 }
 
+function getTaskDeadline(task) {
+  return task?.deadline_at || task?.due_date || null;
+}
+
+function getTaskPlannedStart(task) {
+  return task?.planned_start_at || null;
+}
+
+function getTaskPlannedEnd(task) {
+  return task?.planned_end_at || null;
+}
+
+function getTaskPrimaryDate(task) {
+  return getTaskPlannedStart(task) || getTaskDeadline(task) || task?.created_at || null;
+}
+
 function monthStartKey(value = null) {
   const date = value ? new Date(value) : new Date();
   if (Number.isNaN(date.getTime())) return toDateKey();
@@ -659,7 +675,7 @@ function getViewMeta() {
 
 function getInboxItems() {
   const emailItems = (state.inbox.emails || []).map((item) => ({ kind: "email", id: item.id, sort: item.received_at, item }));
-  const taskItems = (state.inbox.tasks || []).map((item) => ({ kind: "task", id: item.id, sort: item.due_date || item.created_at, item }));
+  const taskItems = (state.inbox.tasks || []).map((item) => ({ kind: "task", id: item.id, sort: getTaskPrimaryDate(item), item }));
   return [...emailItems, ...taskItems].sort((a, b) => (b.sort || "").localeCompare(a.sort || ""));
 }
 
@@ -984,7 +1000,7 @@ function renderTimeline(projectDetail) {
     timeline.push({ at: email.received_at, type: "E-mail", text: `${email.subject} Â· ${email.sender}` });
   }
   for (const task of projectDetail?.tasks || []) {
-    timeline.push({ at: task.due_date || task.created_at, type: "Ăškol", text: `${task.title} Â· ${getTaskStatusLabel(task.status)}` });
+    timeline.push({ at: getTaskPrimaryDate(task), type: "Ăškol", text: `${task.title} Â· ${getTaskStatusLabel(task.status)}` });
   }
   for (const invoice of projectDetail?.invoices || []) {
     timeline.push({ at: invoice.created_at, type: "Faktura", text: `${invoice.invoice_number || invoice.supplier} Â· ${formatCurrency(invoice.amount)}` });
@@ -1426,6 +1442,9 @@ function renderTaskDetail(task) {
   if (!task) return renderEmpty("Vyber Ăşkol ze seznamu.");
   const project = state.projects.find((item) => item.id === task.project_id) || null;
   const sourceEmail = task.source_email || state.emails.find((email) => email.id === task.source_email_id) || null;
+  const deadlineAt = getTaskDeadline(task);
+  const plannedStartAt = getTaskPlannedStart(task);
+  const plannedEndAt = getTaskPlannedEnd(task);
   const workerIds = (task.worker_ids || []).length ? task.worker_ids : (task.assigned_worker_id ? [task.assigned_worker_id] : []);
   const workerEmails = workerIds
     .map((workerId) => state.workers.find((item) => item.id === workerId)?.email || "")
@@ -1468,8 +1487,12 @@ function renderTaskDetail(task) {
           <select name="priority">${renderPriorityOptions(task.priority || "normal")}</select>
         </div>
         <div class="row">
-          <input name="due_date" type="datetime-local" value="${escapeHtml(toDateTimeLocal(task.due_date))}">
+          <input name="deadline_at" type="datetime-local" value="${escapeHtml(toDateTimeLocal(deadlineAt))}" placeholder="Deadline">
           <select name="project_id">${renderProjectOptions(task.project_id)}</select>
+        </div>
+        <div class="row">
+          <input name="planned_start_at" type="datetime-local" value="${escapeHtml(toDateTimeLocal(plannedStartAt))}" placeholder="Začátek práce">
+          <input name="planned_end_at" type="datetime-local" value="${escapeHtml(toDateTimeLocal(plannedEndAt))}" placeholder="Konec práce">
         </div>
         <div class="row">
           <select name="status">${renderTaskStatusOptions(task.status || "pending")}</select>
@@ -1484,11 +1507,16 @@ function renderTaskDetail(task) {
           { label: "Stav", value: getTaskStatusLabel(task.status) },
           { label: "Zakázka", value: project?.name || "Bez zakázky" },
           { label: "Pracovníci", value: getTaskWorkerNames(task) },
+          { label: "Deadline", value: formatDate(deadlineAt) },
+          { label: "Plán", value: plannedStartAt ? `${formatDate(plannedStartAt)}${plannedEndAt ? ` -> ${formatDate(plannedEndAt)}` : ""}` : "-" },
           { label: "Kalendář", value: getTaskCalendarStatusLabel(latestCalendarEvent) },
           { label: "Dokončil", value: task.completed_by?.full_name || "-" },
         ])}
         <div class="detail-grid">
           <div class="detail-item"><span class="detail-item-label">Název zakázky</span><span class="detail-item-value">${escapeHtml(project?.name || "Bez zakázky")}</span></div>
+          <div class="detail-item"><span class="detail-item-label">Deadline</span><span class="detail-item-value">${formatDate(deadlineAt)}</span></div>
+          <div class="detail-item"><span class="detail-item-label">Začátek práce</span><span class="detail-item-value">${formatDate(plannedStartAt)}</span></div>
+          <div class="detail-item"><span class="detail-item-label">Konec práce</span><span class="detail-item-value">${formatDate(plannedEndAt)}</span></div>
           <div class="detail-item"><span class="detail-item-label">E-maily pro notifikaci</span><span class="detail-item-value">${escapeHtml(recipients.join(", ") || "-")}</span></div>
           <div class="detail-item"><span class="detail-item-label">Pozvaní do kalendáře</span><span class="detail-item-value">${escapeHtml(calendarInvitees)}</span></div>
           <div class="detail-item"><span class="detail-item-label">Poslední kalendářová událost</span><span class="detail-item-value">${latestCalendarEvent ?`${escapeHtml(latestCalendarEvent.title)} · ${formatDate(latestCalendarEvent.starts_at)}` : "-"}</span></div>
@@ -1557,7 +1585,8 @@ function openTaskEmailDraft(task) {
   const bodyParts = [
     `Úkol: ${task.title}`,
     `Zakázka: ${getProjectName(task.project_id)}`,
-    `Termín: ${task.due_date ? formatDate(task.due_date) : "-"}`,
+    `Deadline: ${getTaskDeadline(task) ? formatDate(getTaskDeadline(task)) : "-"}`,
+    `Plán: ${getTaskPlannedStart(task) ? formatDate(getTaskPlannedStart(task)) : "-"}${getTaskPlannedEnd(task) ? ` -> ${formatDate(getTaskPlannedEnd(task))}` : ""}`,
     `Pracovníci: ${getTaskWorkerNames(task)}`,
     "",
     task.description || "",
@@ -1716,7 +1745,7 @@ function renderProjectWorkspace() {
         (detail.tasks || []).map((task) => `
           <tr class="${taskStateClass(task)}">
             <td>${escapeHtml(task.title)}</td>
-            <td>${formatDate(task.due_date)}</td>
+            <td>${formatDate(getTaskPrimaryDate(task))}</td>
             <td>${escapeHtml(getTaskStatusLabel(task.status))}</td>
             <td>${escapeHtml(getTaskWorkerNames(task))}</td>
             <td><button class="button button-secondary" type="button" data-open-task="${task.id}">OtevĹ™Ă­t</button></td>
@@ -1977,7 +2006,7 @@ function renderInboxView() {
     return renderListItem({
       key,
       title: escapeHtml(entry.item.title),
-      meta: `${formatDate(entry.item.due_date || entry.item.created_at)} Â· ${escapeHtml(getTaskStatusLabel(entry.item.status))}`,
+      meta: `${formatDate(getTaskPrimaryDate(entry.item))} Â· ${escapeHtml(getTaskStatusLabel(entry.item.status))}`,
       subtitle: escapeHtml(getProjectName(entry.item.project_id)),
       selected: state.selectedInboxKey === key || (!state.selectedInboxKey && key === `${selected?.kind}:${selected?.id}`),
       stateClass: taskStateClass(entry.item),
@@ -2137,7 +2166,7 @@ function renderTasksView() {
   const list = state.tasks.map((task) => renderListItem({
     key: `task:${task.id}`,
     title: escapeHtml(task.title),
-    meta: `${formatDate(task.due_date)} Â· ${escapeHtml(getTaskStatusLabel(task.status))}`,
+    meta: `${formatDate(getTaskPrimaryDate(task))} Â· ${escapeHtml(getTaskStatusLabel(task.status))}`,
     subtitle: escapeHtml(getProjectName(task.project_id)),
     selected: selected?.id === task.id,
     stateClass: taskStateClass(task),
@@ -2807,14 +2836,18 @@ function renderTaskDialog() {
         ${project ? `
           <div class="row">
             <input name="title" placeholder="Název úkolu" required>
-            <input name="due_date" type="datetime-local">
+            <input name="deadline_at" type="datetime-local" placeholder="Deadline">
           </div>
         ` : `
           <div class="row">
-            <input name="due_date" type="datetime-local">
+            <input name="deadline_at" type="datetime-local" placeholder="Deadline">
             <select name="priority">${renderPriorityOptions("normal")}</select>
           </div>
         `}
+        <div class="row">
+          <input name="planned_start_at" type="datetime-local" placeholder="Začátek práce">
+          <input name="planned_end_at" type="datetime-local" placeholder="Konec práce">
+        </div>
         ${project ? `
           <div class="row">
             <select name="priority">${renderPriorityOptions("normal")}</select>
@@ -2873,8 +2906,12 @@ function renderTaskFromEmailDialog() {
           <select name="priority">${renderPriorityOptions(classification.priority || email.priority || "normal")}</select>
         </div>
         <div class="row">
-          <input name="due_date" type="datetime-local" placeholder="Termín splnění" value="${escapeHtml(defaultDueDate)}">
+          <input name="deadline_at" type="datetime-local" placeholder="Deadline" value="${escapeHtml(defaultDueDate)}">
           <select name="project_id">${renderProjectOptions(defaultProjectId)}</select>
+        </div>
+        <div class="row">
+          <input name="planned_start_at" type="datetime-local" placeholder="Začátek práce">
+          <input name="planned_end_at" type="datetime-local" placeholder="Konec práce">
         </div>
         <div class="row">
           <select name="assigned_worker_ids" multiple size="4">${renderWorkerMultiOptions()}</select>
@@ -3037,7 +3074,7 @@ function getWorkerPortalTasks(workerId) {
       return task.assigned_worker_id === workerId || workerIds.includes(workerId);
     })
     .filter((task) => !["done", "archived"].includes(task.status))
-    .sort((a, b) => String(a.due_date || "9999").localeCompare(String(b.due_date || "9999")));
+    .sort((a, b) => String(getTaskPrimaryDate(a) || "9999").localeCompare(String(getTaskPrimaryDate(b) || "9999")));
 }
 
 function getWorkerPortalProjects(workerId) {
@@ -3054,7 +3091,7 @@ function getWorkerPortalProjects(workerId) {
 
 function getWorkerTodayTaskCards(workerId) {
   const todayKey = toDateKey();
-  return getWorkerPortalTasks(workerId).filter((task) => toDateKey(task.due_date) === todayKey);
+  return getWorkerPortalTasks(workerId).filter((task) => toDateKey(getTaskPrimaryDate(task)) === todayKey);
 }
 
 function renderWorkerPortalHome(workerId) {
@@ -3083,7 +3120,7 @@ function renderWorkerPortalHome(workerId) {
                   <strong>${escapeHtml(task.title)}</strong>
                   <span class="chip">${escapeHtml(getTaskStatusLabel(task.status))}</span>
                 </div>
-                <div class="worker-task-meta">${escapeHtml(getProjectName(task.project_id))}${task.due_date ? ` · ${escapeHtml(formatDate(task.due_date))}` : ""}</div>
+                <div class="worker-task-meta">${escapeHtml(getProjectName(task.project_id))}${getTaskPrimaryDate(task) ? ` · ${escapeHtml(formatDate(getTaskPrimaryDate(task)))}` : ""}</div>
                 <div class="worker-card-actions">
                   <button type="button" class="button button-primary" data-worker-section="work" data-worker-project="${task.project_id || ""}">Zapsat práci</button>
                   <button type="button" class="button button-secondary" data-worker-section="photo" data-worker-project="${task.project_id || ""}">Přidat fotku</button>
@@ -3569,7 +3606,10 @@ async function submitProjectTaskForm(form) {
   payload.assigned_worker_ids = formData.getAll("assigned_worker_ids").map((value) => Number(value)).filter(Boolean);
   payload.assigned_worker_id = payload.assigned_worker_ids[0] || null;
   payload.estimated_hours = payload.estimated_hours ?Number(payload.estimated_hours) : null;
-  payload.due_date = payload.due_date || null;
+  payload.deadline_at = payload.deadline_at || null;
+  payload.planned_start_at = payload.planned_start_at || null;
+  payload.planned_end_at = payload.planned_end_at || null;
+  payload.due_date = payload.deadline_at;
   await fetchJson(`/api/projects/${projectId}/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -3588,7 +3628,10 @@ async function submitTaskForm(form) {
   payload.assigned_worker_ids = formData.getAll("assigned_worker_ids").map((value) => Number(value)).filter(Boolean);
   payload.assigned_worker_id = payload.assigned_worker_ids[0] || null;
   payload.estimated_hours = payload.estimated_hours ?Number(payload.estimated_hours) : null;
-  payload.due_date = payload.due_date || null;
+  payload.deadline_at = payload.deadline_at || null;
+  payload.planned_start_at = payload.planned_start_at || null;
+  payload.planned_end_at = payload.planned_end_at || null;
+  payload.due_date = payload.deadline_at;
   const result = await fetchJson("/api/tasks", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -3608,7 +3651,10 @@ async function submitTaskUpdateForm(form) {
   payload.assigned_worker_ids = formData.getAll("assigned_worker_ids").map((value) => Number(value)).filter(Boolean);
   payload.assigned_worker_id = payload.assigned_worker_ids[0] || null;
   payload.estimated_hours = payload.estimated_hours ?Number(payload.estimated_hours) : null;
-  payload.due_date = String(payload.due_date || "").trim() || null;
+  payload.deadline_at = String(payload.deadline_at || "").trim() || null;
+  payload.planned_start_at = String(payload.planned_start_at || "").trim() || null;
+  payload.planned_end_at = String(payload.planned_end_at || "").trim() || null;
+  payload.due_date = payload.deadline_at;
 
   await fetchJson(`/api/tasks/${taskId}`, {
     method: "PUT",
@@ -3633,7 +3679,10 @@ async function submitTaskFromEmailForm(form) {
   payload.assigned_worker_ids = formData.getAll("assigned_worker_ids").map((value) => Number(value)).filter(Boolean);
   payload.assigned_worker_id = payload.assigned_worker_ids[0] || null;
   payload.estimated_hours = payload.estimated_hours ?Number(payload.estimated_hours) : null;
-  payload.due_date = payload.due_date || null;
+  payload.deadline_at = payload.deadline_at || null;
+  payload.planned_start_at = payload.planned_start_at || null;
+  payload.planned_end_at = payload.planned_end_at || null;
+  payload.due_date = payload.deadline_at;
 
   const result = await fetchJson(`/api/emails/${encodeURIComponent(emailId)}/action`, {
     method: "POST",
@@ -3644,6 +3693,9 @@ async function submitTaskFromEmailForm(form) {
       title: payload.title,
       description: payload.description,
       due_date: payload.due_date,
+      deadline_at: payload.deadline_at,
+      planned_start_at: payload.planned_start_at,
+      planned_end_at: payload.planned_end_at,
       priority: payload.priority,
       assigned_worker_id: payload.assigned_worker_id,
       estimated_hours: payload.estimated_hours,

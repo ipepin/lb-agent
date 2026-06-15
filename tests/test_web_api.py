@@ -359,6 +359,7 @@ class TestWebApi(unittest.TestCase):
         self.assertEqual(tasks_payload[0]["title"], "Upravený úkol")
         self.assertEqual(tasks_payload[0]["description"], "Vlastní popis z dialogu")
         self.assertEqual(tasks_payload[0]["due_date"], "2026-04-25T09:30")
+        self.assertEqual(tasks_payload[0]["deadline_at"], "2026-04-25T09:30")
         self.assertEqual(tasks_payload[0]["priority"], "high")
         self.assertEqual(tasks_payload[0]["estimated_hours"], 2.0)
 
@@ -703,9 +704,13 @@ class TestWebApi(unittest.TestCase):
                 "description": "PĹ™ipravit materiĂˇl na montĂˇĹľ.",
                 "priority": "high",
                 "due_date": "2026-04-20T09:00:00",
+                "planned_start_at": "2026-04-20T09:00:00",
+                "planned_end_at": "2026-04-20T11:00:00",
             },
         )
         self.assertEqual(project_task_response.status_code, 200)
+        self.assertEqual(project_task_response.json()["item"]["planned_start_at"], "2026-04-20T09:00:00")
+        self.assertEqual(project_task_response.json()["item"]["planned_end_at"], "2026-04-20T11:00:00")
 
         project_detail = self.client.get(f"/api/projects/{project_id}").json()
         self.assertEqual(len(project_detail["tasks"]), 1)
@@ -738,6 +743,8 @@ class TestWebApi(unittest.TestCase):
                 "description": "Potvrdit termin realizace.",
                 "priority": "high",
                 "due_date": "2026-04-22T09:30:00",
+                "planned_start_at": "2026-04-22T09:30:00",
+                "planned_end_at": "2026-04-22T11:00:00",
                 "project_id": project_id,
                 "assigned_worker_id": worker_id,
                 "estimated_hours": 1.5,
@@ -761,6 +768,8 @@ class TestWebApi(unittest.TestCase):
         events = crud.list_calendar_events(self.config)
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].title, "Zakazka Kalendar – Zavolat klientovi")
+        self.assertEqual(events[0].starts_at, "2026-04-22T09:30:00")
+        self.assertEqual(events[0].ends_at, "2026-04-22T11:00:00")
         self.assertEqual(events[0].task_id, task_id)
         self.assertEqual(events[0].project_id, project_id)
         self.assertEqual(events[0].assigned_worker_id, worker_id)
@@ -772,6 +781,8 @@ class TestWebApi(unittest.TestCase):
         tasks_payload = self.client.get("/api/tasks").json()["items"]
         task_payload = next(item for item in tasks_payload if item["id"] == task_id)
         self.assertEqual(task_payload["worker_ids"], [worker_id])
+        self.assertEqual(task_payload["planned_start_at"], "2026-04-22T09:30:00")
+        self.assertEqual(task_payload["planned_end_at"], "2026-04-22T11:00:00")
         self.assertEqual(task_payload["latest_calendar_event"]["attendee_emails"], ["petr@example.com"])
         self.assertTrue(any(entry["kind"] == "calendar" for entry in task_payload["timeline"]))
 
@@ -810,6 +821,8 @@ class TestWebApi(unittest.TestCase):
                 "priority": "high",
                 "status": "in_progress",
                 "due_date": "2026-04-25T08:30",
+                "planned_start_at": "2026-04-25T08:30",
+                "planned_end_at": "2026-04-25T11:30",
                 "project_id": project_id,
                 "assigned_worker_id": worker_id,
                 "assigned_worker_ids": [worker_id],
@@ -823,6 +836,9 @@ class TestWebApi(unittest.TestCase):
         self.assertEqual(item["priority"], "high")
         self.assertEqual(item["status"], "in_progress")
         self.assertEqual(item["due_date"], "2026-04-25T08:30")
+        self.assertEqual(item["deadline_at"], "2026-04-25T08:30")
+        self.assertEqual(item["planned_start_at"], "2026-04-25T08:30")
+        self.assertEqual(item["planned_end_at"], "2026-04-25T11:30")
         self.assertEqual(item["estimated_hours"], 3.0)
         self.assertEqual(item["worker_ids"], [worker_id])
 
@@ -834,6 +850,8 @@ class TestWebApi(unittest.TestCase):
                 "priority": "high",
                 "status": "done",
                 "due_date": "2026-04-25T08:30",
+                "planned_start_at": "2026-04-25T08:30",
+                "planned_end_at": "2026-04-25T11:30",
                 "project_id": project_id,
                 "assigned_worker_id": worker_id,
                 "assigned_worker_ids": [worker_id],

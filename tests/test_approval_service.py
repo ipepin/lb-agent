@@ -84,6 +84,7 @@ class TestApprovalService(unittest.TestCase):
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0].title, "Need report")
         self.assertEqual(tasks[0].project_id, project.id)
+        self.assertEqual(tasks[0].deadline_at, "2026-04-20")
         self.assertIsNotNone(item)
         self.assertEqual(item.status, "approved")
 

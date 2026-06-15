@@ -55,6 +55,9 @@ class Task:
     priority: str = "normal"
     status: str = "pending"
     due_date: str | None = None
+    deadline_at: str | None = None
+    planned_start_at: str | None = None
+    planned_end_at: str | None = None
     source_email_id: str | None = None
     project_id: int | None = None
     assigned_worker_id: int | None = None
