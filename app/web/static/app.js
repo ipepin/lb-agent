@@ -1313,7 +1313,49 @@ function renderPlanningConflictCard(task) {
           </div>
         `).join("")}
       </div>
-      ${suggestion?.planned_start_at ? `<div class="toolbar"><span class="selection-chip">Doporučený slot: ${escapeHtml(formatDate(suggestion.planned_start_at))}${suggestion.planned_end_at ? ` -> ${escapeHtml(formatDate(suggestion.planned_end_at))}` : ""}</span></div>` : ""}
+      ${suggestion?.planned_start_at ? `
+        <div class="toolbar">
+          <span class="selection-chip">Doporučený slot: ${escapeHtml(formatDate(suggestion.planned_start_at))}${suggestion.planned_end_at ? ` -> ${escapeHtml(formatDate(suggestion.planned_end_at))}` : ""}</span>
+          <button
+            type="button"
+            class="button button-secondary"
+            data-apply-planning-suggestion="task-update-form"
+            data-planned-start-at="${escapeHtml(suggestion.planned_start_at)}"
+            data-planned-end-at="${escapeHtml(suggestion.planned_end_at || "")}"
+          >Použít doporučený slot</button>
+        </div>
+      ` : ""}
+    </div>
+  `;
+}
+
+function renderPlanningFieldIntro() {
+  return `
+    <div class="field-note">
+      <strong>Deadline</strong> = dokdy má být úkol hotový.
+      <strong>Začátek práce / Konec práce</strong> = konkrétní blok v kalendáři pro pracovníka.
+    </div>
+  `;
+}
+
+function renderPlanningFieldRow({ deadlineAt = "", plannedStartAt = "", plannedEndAt = "" } = {}) {
+  return `
+    <div class="row">
+      <label>
+        <span class="detail-item-label">Deadline</span>
+        <input name="deadline_at" type="datetime-local" value="${escapeHtml(toDateTimeLocal(deadlineAt))}" placeholder="Dokdy musí být hotovo">
+      </label>
+      <label>
+        <span class="detail-item-label">Začátek práce</span>
+        <input name="planned_start_at" type="datetime-local" value="${escapeHtml(toDateTimeLocal(plannedStartAt))}" placeholder="Kdy práce začne">
+      </label>
+    </div>
+    <div class="row">
+      <label>
+        <span class="detail-item-label">Konec práce</span>
+        <input name="planned_end_at" type="datetime-local" value="${escapeHtml(toDateTimeLocal(plannedEndAt))}" placeholder="Kdy práce skončí">
+      </label>
+      <div class="field-note">Když konec nevyplníš, dopočítá se z odhadu hodin nebo se použije 1 hodina.</div>
     </div>
   `;
 }
@@ -1512,21 +1554,15 @@ function renderTaskDetail(task) {
           <input name="title" value="${escapeHtml(task.title)}" placeholder="Název úkolu" required>
           <select name="priority">${renderPriorityOptions(task.priority || "normal")}</select>
         </div>
+        ${renderPlanningFieldIntro()}
+        ${renderPlanningFieldRow({ deadlineAt, plannedStartAt, plannedEndAt })}
         <div class="row">
-          <input name="deadline_at" type="datetime-local" value="${escapeHtml(toDateTimeLocal(deadlineAt))}" placeholder="Deadline">
           <select name="project_id">${renderProjectOptions(task.project_id)}</select>
-        </div>
-        <div class="row">
-          <input name="planned_start_at" type="datetime-local" value="${escapeHtml(toDateTimeLocal(plannedStartAt))}" placeholder="Začátek práce">
-          <input name="planned_end_at" type="datetime-local" value="${escapeHtml(toDateTimeLocal(plannedEndAt))}" placeholder="Konec práce">
-        </div>
-        <div class="row">
           <select name="status">${renderTaskStatusOptions(task.status || "pending")}</select>
-          <select name="assigned_worker_ids" multiple size="4">${renderWorkerMultiOptions(workerIds)}</select>
         </div>
         <div class="row">
+          <select name="assigned_worker_ids" multiple size="4">${renderWorkerMultiOptions(workerIds)}</select>
           <input name="estimated_hours" type="number" min="0" step="0.5" placeholder="Odhad hodin" value="${task.estimated_hours ?? ""}">
-          <div></div>
         </div>
         <textarea name="description" rows="5" placeholder="Popis úkolu">${escapeHtml(task.description || "")}</textarea>
         ${renderSummaryStrip([
@@ -2862,22 +2898,20 @@ function renderTaskDialog() {
         ${project ? `
           <div class="row">
             <input name="title" placeholder="Název úkolu" required>
-            <input name="deadline_at" type="datetime-local" placeholder="Deadline">
+            <select name="priority">${renderPriorityOptions("normal")}</select>
           </div>
         ` : `
           <div class="row">
-            <input name="deadline_at" type="datetime-local" placeholder="Deadline">
             <select name="priority">${renderPriorityOptions("normal")}</select>
+            <div></div>
           </div>
         `}
-        <div class="row">
-          <input name="planned_start_at" type="datetime-local" placeholder="Začátek práce">
-          <input name="planned_end_at" type="datetime-local" placeholder="Konec práce">
-        </div>
+        ${renderPlanningFieldIntro()}
+        ${renderPlanningFieldRow()}
         ${project ? `
           <div class="row">
-            <select name="priority">${renderPriorityOptions("normal")}</select>
             <select name="assigned_worker_ids" multiple size="4">${renderWorkerMultiOptions()}</select>
+            <input name="estimated_hours" type="number" step="0.25" min="0" placeholder="Odhad hodin">
           </div>
         ` : `
           <div class="row">
@@ -2885,12 +2919,6 @@ function renderTaskDialog() {
             <input name="estimated_hours" type="number" min="0" step="0.5" placeholder="Odhad hodin">
           </div>
         `}
-        ${project ? `
-          <div class="row">
-            <input name="estimated_hours" type="number" step="0.25" min="0" placeholder="Odhad hodin">
-            <div></div>
-          </div>
-        ` : ""}
         <textarea name="description" rows="4" placeholder="Popis úkolu"></textarea>
         <div class="modal-actions">
           <button class="button button-secondary" type="button" data-close-task-dialog>Zrušit</button>
@@ -2932,16 +2960,14 @@ function renderTaskFromEmailDialog() {
           <select name="priority">${renderPriorityOptions(classification.priority || email.priority || "normal")}</select>
         </div>
         <div class="row">
-          <input name="deadline_at" type="datetime-local" placeholder="Deadline" value="${escapeHtml(defaultDueDate)}">
           <select name="project_id">${renderProjectOptions(defaultProjectId)}</select>
+          <input name="estimated_hours" type="number" step="0.5" min="0" placeholder="Odhad hodin">
         </div>
-        <div class="row">
-          <input name="planned_start_at" type="datetime-local" placeholder="Začátek práce">
-          <input name="planned_end_at" type="datetime-local" placeholder="Konec práce">
-        </div>
+        ${renderPlanningFieldIntro()}
+        ${renderPlanningFieldRow({ deadlineAt: defaultDueDate })}
         <div class="row">
           <select name="assigned_worker_ids" multiple size="4">${renderWorkerMultiOptions()}</select>
-          <input name="estimated_hours" type="number" step="0.5" min="0" placeholder="Odhad hodin">
+          <div></div>
         </div>
         <textarea name="description" rows="8" placeholder="Popis úkolu">${escapeHtml(defaultDescription)}</textarea>
         <div class="modal-actions">
@@ -4063,7 +4089,7 @@ function bindEvents() {
     if (rawTarget instanceof Element && rawTarget.closest("[data-worklog-paid-toggle]")) {
       return;
     }
-    const target = event.target.closest("[data-view], [data-refresh], [data-open-project-dialog], [data-open-task-dialog], [data-close-project-dialog], [data-close-email-dialog], [data-close-task-dialog], [data-select-item], [data-project-section], [data-email-action], [data-task-action], [data-task-email], [data-bulk-email-action], [data-bulk-task-action], [data-worklog-pay], [data-project-worklog-pay], [data-open-email], [data-open-task], [data-worklog-id], [data-worklog-summary], [data-worklog-project-select], [data-worklog-worker-select], [data-worklog-view-mode], [data-conversation-assign], [data-create-project-from-email], [data-delete-email], [data-delete-task], [data-delete-project], [data-delete-worker], [data-delete-worklog], [data-delete-user], [data-logout], [data-open-password-dialog], [data-calendar-nav], [data-calendar-date], [data-calendar-mode], [data-worker-section], [data-worker-install]");
+    const target = event.target.closest("[data-view], [data-refresh], [data-open-project-dialog], [data-open-task-dialog], [data-close-project-dialog], [data-close-email-dialog], [data-close-task-dialog], [data-select-item], [data-project-section], [data-email-action], [data-task-action], [data-task-email], [data-bulk-email-action], [data-bulk-task-action], [data-worklog-pay], [data-project-worklog-pay], [data-open-email], [data-open-task], [data-worklog-id], [data-worklog-summary], [data-worklog-project-select], [data-worklog-worker-select], [data-worklog-view-mode], [data-conversation-assign], [data-create-project-from-email], [data-delete-email], [data-delete-task], [data-delete-project], [data-delete-worker], [data-delete-worklog], [data-delete-user], [data-logout], [data-open-password-dialog], [data-calendar-nav], [data-calendar-date], [data-calendar-mode], [data-worker-section], [data-worker-install], [data-apply-planning-suggestion]");
     if (!target) return;
     event.preventDefault();
 
@@ -4129,6 +4155,17 @@ function bindEvents() {
       if (target.hasAttribute("data-close-email-dialog")) {
         emailDialog?.close();
         state.modalEmailId = null;
+        return;
+      }
+      if (target.dataset.applyPlanningSuggestion) {
+        const form = document.getElementById(target.dataset.applyPlanningSuggestion);
+        if (form instanceof HTMLFormElement) {
+          const startInput = form.querySelector('input[name="planned_start_at"]');
+          const endInput = form.querySelector('input[name="planned_end_at"]');
+          if (startInput) startInput.value = toDateTimeLocal(target.dataset.plannedStartAt || "");
+          if (endInput) endInput.value = toDateTimeLocal(target.dataset.plannedEndAt || "");
+          showMessage("ok", "Doporučený slot byl vyplněn do formuláře.");
+        }
         return;
       }
       if (target.dataset.selectItem) {

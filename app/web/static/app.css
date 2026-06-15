@@ -1242,6 +1242,18 @@ a {
   gap: 10px;
 }
 
+.compact-form .row > label,
+.dialog-form .row > label {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.compact-form .row > label .detail-item-label,
+.dialog-form .row > label .detail-item-label {
+  padding: 0 2px;
+}
+
 .inline-form {
   display: grid;
   gap: 10px;
