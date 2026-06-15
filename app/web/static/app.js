@@ -880,6 +880,18 @@ function renderEmpty(text) {
   return `<div class="empty-state">${escapeHtml(text)}</div>`;
 }
 
+function renderAuthLoadingView() {
+  return `
+    <section class="auth-shell">
+      <div class="auth-card">
+        <div class="brand-kicker">LB-AGENT</div>
+        <h1>Obnovuji relaci</h1>
+        <p>Načítám účet a pracovní data.</p>
+      </div>
+    </section>
+  `;
+}
+
 function renderListItem({ key, title, meta, subtitle, selected = false, stateClass = "", checkbox = "" }) {
   return `
     <button type="button" class="list-item ${stateClass} ${selected ?"is-selected" : ""}" data-select-item="${escapeHtml(key)}">
@@ -3128,6 +3140,15 @@ function renderWorkerPortalPhotoForm(workerId) {
 
 function renderApp() {
   if (!root) return;
+  if (!state.authReady) {
+    root.innerHTML = normalizeCzechText(renderAuthLoadingView());
+    renderProjectDialog();
+    renderEmailDialog();
+    renderTaskDialog();
+    renderTaskFromEmailDialog();
+    renderPasswordDialog();
+    return;
+  }
   if (!state.currentUser) {
     root.innerHTML = normalizeCzechText(renderLoginView());
     renderProjectDialog();
