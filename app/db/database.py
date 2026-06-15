@@ -270,6 +270,27 @@ def _ensure_column(
         )
 
 
+def _ensure_indexes(connection: sqlite3.Connection) -> None:
+    statements = [
+        "CREATE INDEX IF NOT EXISTS idx_emails_received_at ON emails(received_at)",
+        "CREATE INDEX IF NOT EXISTS idx_emails_status ON emails(status)",
+        "CREATE INDEX IF NOT EXISTS idx_emails_category ON emails(category)",
+        "CREATE INDEX IF NOT EXISTS idx_emails_thread_id ON emails(thread_id)",
+        "CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id)",
+        "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)",
+        "CREATE INDEX IF NOT EXISTS idx_tasks_assigned_worker_id ON tasks(assigned_worker_id)",
+        "CREATE INDEX IF NOT EXISTS idx_task_workers_worker_id ON task_workers(worker_id)",
+        "CREATE INDEX IF NOT EXISTS idx_work_logs_project_id ON work_logs(project_id)",
+        "CREATE INDEX IF NOT EXISTS idx_work_logs_worker_id ON work_logs(worker_id)",
+        "CREATE INDEX IF NOT EXISTS idx_work_logs_payment_status ON work_logs(payment_status)",
+        "CREATE INDEX IF NOT EXISTS idx_email_project_links_project_id ON email_project_links(project_id)",
+        "CREATE INDEX IF NOT EXISTS idx_calendar_events_task_id ON calendar_events(task_id)",
+        "CREATE INDEX IF NOT EXISTS idx_calendar_events_project_id ON calendar_events(project_id)",
+    ]
+    for statement in statements:
+        connection.execute(statement)
+
+
 def _repair_calendar_event_links(connection: sqlite3.Connection) -> None:
     events = connection.execute(
         """
@@ -446,5 +467,6 @@ def initialize_database(config: AppConfig) -> None:
         _ensure_column(connection, "project_documents", "source_email_id", "TEXT")
         _ensure_column(connection, "project_documents", "worker_id", "INTEGER")
         _ensure_column(connection, "project_documents", "work_date", "TEXT")
+        _ensure_indexes(connection)
         _repair_calendar_event_links(connection)
         connection.commit()

@@ -1,92 +1,36 @@
 # Google Cloud Deploy
 
-Tato složka připravuje `LB-AGENT` na nasazení na jednu `Google Cloud Compute Engine` VM.
-
-Doporučený základ:
-- `Ubuntu 24.04 LTS`
-- `e2-micro`
-- veřejná IP
-- otevřené porty `80` a `443`
-
-## Cílové rozložení
-
-Na serveru:
+Produkcni VM pro LB-AGENT pouziva repo primo v `/opt/lb-agent`.
 
 ```text
 /opt/lb-agent/
-├── app/                 # git clone projektu
-├── .venv/               # python virtualenv
-├── shared/
-│   ├── .env            # produkční env
-│   ├── credentials.json
-│   └── data/
-│       ├── app.db
-│       ├── attachments/
-│       ├── gmail_token.json
-│       ├── google_calendar_token.json
-│       └── last_sync.txt
-└── logs/
+|-- app/                 # Python package
+|-- data/                # SQLite, tokeny, prilohy
+|-- deploy/
+|-- .venv/               # Python virtualenv
+|-- .env                 # produkcni env
+`-- credentials.json
 ```
 
-Lokální projekt počítá s `data/` a `.env` v kořeni repo. Na serveru to vyřeší symlinky:
-- `/opt/lb-agent/app/.env -> /opt/lb-agent/shared/.env`
-- `/opt/lb-agent/app/data -> /opt/lb-agent/shared/data`
-- `/opt/lb-agent/app/credentials.json -> /opt/lb-agent/shared/credentials.json`
+Starsi varianta s `/opt/lb-agent/app` jako clone adresar se uz nepouziva.
 
-## 1. Připojení na VM
-
-Použij SSH z Google Cloud konzole nebo lokálně:
-
-```bash
-gcloud compute ssh <VM_NAME> --zone <ZONE>
-```
-
-## 2. Bootstrap serveru
-
-Nahraj repo nebo ho naklonuj a pak spusť:
-
-```bash
-sudo bash deploy/scripts/bootstrap_ubuntu.sh
-```
-
-Skript:
-- nainstaluje systémové balíčky
-- vytvoří adresáře v `/opt/lb-agent`
-- připraví virtualenv
-- nainstaluje Python závislosti
-
-## 3. Nasazení aplikace
-
-Pokud už je repo na serveru:
+## Bootstrap
 
 ```bash
 sudo mkdir -p /opt/lb-agent
 sudo chown -R $USER:$USER /opt/lb-agent
-git clone <TVE_REPO_URL> /opt/lb-agent/app
-cd /opt/lb-agent/app
+git clone <REPO_URL> /opt/lb-agent
+cd /opt/lb-agent
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+mkdir -p data/attachments
+cp .env.example .env
 ```
 
-Vytvoř sdílené soubory:
+## Systemd
 
 ```bash
-mkdir -p /opt/lb-agent/shared/data/attachments
-cp .env.example /opt/lb-agent/shared/.env
-cp credentials.json /opt/lb-agent/shared/credentials.json
-```
-
-Pak nastav symlinky:
-
-```bash
-ln -sfn /opt/lb-agent/shared/.env /opt/lb-agent/app/.env
-ln -sfn /opt/lb-agent/shared/data /opt/lb-agent/app/data
-ln -sfn /opt/lb-agent/shared/credentials.json /opt/lb-agent/app/credentials.json
-```
-
-## 4. Systemd služby
-
-Zkopíruj service soubory:
-
-```bash
+cd /opt/lb-agent
 sudo cp deploy/systemd/lb-agent-web.service /etc/systemd/system/
 sudo cp deploy/systemd/lb-agent-worker.service /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -103,41 +47,43 @@ journalctl -u lb-agent-web -n 100 --no-pager
 journalctl -u lb-agent-worker -n 100 --no-pager
 ```
 
-## 5. Nginx
-
-Zkopíruj konfiguraci:
+## Nginx a HTTPS
 
 ```bash
 sudo cp deploy/nginx/lb-agent.conf /etc/nginx/sites-available/lb-agent
 sudo ln -sfn /etc/nginx/sites-available/lb-agent /etc/nginx/sites-enabled/lb-agent
 sudo nginx -t
 sudo systemctl reload nginx
-```
-
-## 6. HTTPS
-
-Po nastavení domény:
-
-```bash
 sudo apt-get install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d <TVA_DOMENA>
+sudo certbot --nginx -d <DOMENA>
 ```
 
-## 7. Důležité produkční poznámky
+## Aktualizace z Windows
 
-- `GOOGLE_CALENDAR_ID` a OAuth tokeny musí být na serveru ve sdílené složce.
-- Po prvním deployi znovu ověř:
-  - Gmail sync
-  - zápis do Google Kalendáře
-  - přílohy
-- SQLite teď stačí. Až bude víc uživatelů naráz, přejdeme na PostgreSQL.
+```powershell
+.\deploy\scripts\deploy_vm.ps1
+```
 
-## 8. Aktualizace aplikace
+## Rucni aktualizace na serveru
 
 ```bash
-cd /opt/lb-agent/app
-git pull
+cd /opt/lb-agent
+bash deploy/scripts/backup_server.sh
+git fetch origin main
+git reset --hard origin/main
 /opt/lb-agent/.venv/bin/pip install -r requirements.txt
+sudo cp deploy/systemd/lb-agent-web.service /etc/systemd/system/
+sudo cp deploy/systemd/lb-agent-worker.service /etc/systemd/system/
+sudo systemctl daemon-reload
 sudo systemctl restart lb-agent-web
 sudo systemctl restart lb-agent-worker
+curl -fsS http://127.0.0.1:8000/api/health
 ```
+
+## Zaloha dat
+
+```bash
+bash deploy/scripts/backup_server.sh
+```
+
+Skript ulozi kopii SQLite databaze a archiv slozky `data/` do `deploy-backups/` a smaze zalohy starsi nez 30 dni.

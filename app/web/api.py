@@ -173,8 +173,11 @@ def _serialize_user(config: AppConfig, user: UserModel) -> dict[str, Any]:
     }
 
 
-def _serialize_email(config: AppConfig, item: Any) -> dict[str, Any]:
+def _serialize_email(config: AppConfig, item: Any, *, include_body: bool = True) -> dict[str, Any]:
     payload = asdict(item)
+    if not include_body:
+        payload.pop("body", None)
+        payload["body_preview"] = (item.summary or item.body or "")[:240]
     project_ids = crud.list_email_project_ids(config, item.id)
     projects = []
     for project_id in project_ids:
@@ -614,7 +617,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         }
 
     @app.get("/api/inbox/unprocessed")
-    def unprocessed_inbox(request: Request) -> dict[str, object]:
+    def unprocessed_inbox(request: Request, include_body: bool = True) -> dict[str, object]:
         require_roles(request, ROLE_OWNER)
         emails = [
             item
@@ -627,12 +630,12 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             if item.status not in {"done", "archived"}
         ]
         return {
-            "emails": [_serialize_email(active_config, item) for item in emails],
+            "emails": [_serialize_email(active_config, item, include_body=include_body) for item in emails],
             "tasks": [_serialize_task(active_config, item) for item in tasks],
         }
 
     @app.get("/api/archive")
-    def archive(request: Request) -> dict[str, object]:
+    def archive(request: Request, include_body: bool = True) -> dict[str, object]:
         require_roles(request, ROLE_OWNER)
         emails = [item for item in crud.list_emails(active_config) if item.status == "archived"]
         tasks = [
@@ -641,7 +644,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             if item.status in {"done", "archived"}
         ]
         return {
-            "emails": [_serialize_email(active_config, item) for item in emails],
+            "emails": [_serialize_email(active_config, item, include_body=include_body) for item in emails],
             "tasks": [_serialize_task(active_config, item) for item in tasks],
         }
 
@@ -684,12 +687,41 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         }
 
     @app.get("/api/emails")
-    def list_emails(request: Request, include_archived: bool = False) -> dict[str, object]:
+    def list_emails(
+        request: Request,
+        include_archived: bool = False,
+        include_body: bool = True,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> dict[str, object]:
         require_roles(request, ROLE_OWNER)
         emails = list(crud.list_emails(active_config))
         if not include_archived:
             emails = [item for item in emails if item.status != "archived"]
-        return {"items": [_serialize_email(active_config, item) for item in emails]}
+        total = len(emails)
+        safe_offset = max(offset, 0)
+        if limit is not None:
+            safe_limit = max(min(limit, 500), 1)
+            emails = emails[safe_offset : safe_offset + safe_limit]
+        elif safe_offset:
+            emails = emails[safe_offset:]
+        return {
+            "items": [
+                _serialize_email(active_config, item, include_body=include_body)
+                for item in emails
+            ],
+            "total": total,
+            "limit": limit,
+            "offset": safe_offset,
+        }
+
+    @app.get("/api/emails/{email_id}")
+    def get_email(email_id: str, request: Request) -> dict[str, object]:
+        require_roles(request, ROLE_OWNER)
+        email = crud.get_email(active_config, email_id)
+        if email is None:
+            raise HTTPException(status_code=404, detail="E-mail nebyl nalezen.")
+        return {"item": _serialize_email(active_config, email)}
 
     @app.get("/api/tasks")
     def list_tasks(request: Request) -> dict[str, object]:

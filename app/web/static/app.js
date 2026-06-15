@@ -686,6 +686,7 @@ function getFilteredEmails() {
       email.subject,
       email.sender,
       email.body,
+      email.body_preview,
       email.summary,
       (email.attachments || []).map((attachment) => attachment.name || attachment.path || "").join(" "),
       (email.projects || []).map((project) => project.name || "").join(" "),
@@ -696,6 +697,43 @@ function getFilteredEmails() {
       || email.category === state.emailCategoryFilter;
     return inSearch && categoryOk;
   });
+}
+
+function findEmailById(emailId) {
+  if (!emailId) return null;
+  return state.emails.find((item) => item.id === emailId)
+    || state.inbox.emails.find((item) => item.id === emailId)
+    || state.archive.emails.find((item) => item.id === emailId)
+    || state.projectDetail?.emails?.find((item) => item.id === emailId)
+    || state.conversationDetail?.emails?.find((item) => item.id === emailId)
+    || null;
+}
+
+function mergeEmailList(items, email) {
+  if (!Array.isArray(items)) return items;
+  const index = items.findIndex((item) => item.id === email.id);
+  if (index === -1) return items;
+  const nextItems = [...items];
+  nextItems[index] = { ...nextItems[index], ...email };
+  return nextItems;
+}
+
+function mergeEmailDetail(email) {
+  state.emails = mergeEmailList(state.emails, email);
+  state.inbox = { ...state.inbox, emails: mergeEmailList(state.inbox.emails || [], email) };
+  state.archive = { ...state.archive, emails: mergeEmailList(state.archive.emails || [], email) };
+  if (state.projectDetail?.emails) {
+    state.projectDetail = {
+      ...state.projectDetail,
+      emails: mergeEmailList(state.projectDetail.emails, email),
+    };
+  }
+  if (state.conversationDetail?.emails) {
+    state.conversationDetail = {
+      ...state.conversationDetail,
+      emails: mergeEmailList(state.conversationDetail.emails, email),
+    };
+  }
 }
 
 function getFilteredWorklogs() {
@@ -1201,6 +1239,8 @@ function toDateTimeLocal(value) {
 
 function renderEmailDetail(email) {
   if (!email) return renderEmpty("Vyber e-mail ze seznamu.");
+  const body = email.body ?? email.body_preview ?? "";
+  const hasFullBody = typeof email.body === "string";
   const assignedProjects = email.projects?.length
     ?email.projects.map((project) => `<span class="chip">${escapeHtml(project.name)}</span>`).join("")
     : `<span class="selection-chip">Bez pĹ™iĹ™azenĂ© zakĂˇzky</span>`;
@@ -1249,7 +1289,8 @@ function renderEmailDetail(email) {
       </div>
       <div class="section-card">
         <div class="panel-header"><div><h4>Text e-mailu</h4></div></div>
-        <pre class="text-block">${escapeHtml(email.body || "")}</pre>
+        ${hasFullBody ? "" : `<div class="empty-state">Načítám celý text e-mailu...</div>`}
+        <pre class="text-block">${escapeHtml(body)}</pre>
       </div>
     </div>
   `;
@@ -2575,9 +2616,7 @@ function renderProjectDialog() {
 
 function renderEmailDialog() {
   if (!emailDialog) return;
-  const email = state.emails.find((item) => item.id === state.modalEmailId)
-    || state.projectDetail?.emails?.find((item) => item.id === state.modalEmailId)
-    || null;
+  const email = findEmailById(state.modalEmailId);
 
   if (!email) {
     emailDialog.innerHTML = "";
@@ -2659,9 +2698,7 @@ function renderTaskDialog() {
 
 function renderTaskFromEmailDialog() {
   if (!taskFromEmailDialog) return;
-  const email = state.emails.find((item) => item.id === state.modalTaskEmailId)
-    || state.projectDetail?.emails?.find((item) => item.id === state.modalTaskEmailId)
-    || null;
+  const email = findEmailById(state.modalTaskEmailId);
 
   if (!email) {
     taskFromEmailDialog.innerHTML = "";
@@ -3060,6 +3097,19 @@ async function loadConversationDetail(conversationId = state.selectedConversatio
   state.conversationDetail = await fetchJson(`/api/conversations/${encodeURIComponent(conversationId)}`);
 }
 
+async function loadEmailDetail(emailId) {
+  const cached = findEmailById(emailId);
+  if (!emailId || (cached && typeof cached.body === "string")) {
+    return cached;
+  }
+  const result = await fetchJson(`/api/emails/${encodeURIComponent(emailId)}`);
+  if (result.item) {
+    mergeEmailDetail(result.item);
+    return result.item;
+  }
+  return null;
+}
+
 async function loadCurrentUser() {
   const result = await fetchJson("/api/auth/me");
   state.currentUser = result.item || null;
@@ -3080,10 +3130,10 @@ async function loadAll() {
     worklogs: () => fetchJson("/api/worklogs"),
     worklogSummary: () => fetchJson("/api/worklogs/summary"),
     users: () => fetchJson("/api/users"),
-    inbox: () => fetchJson("/api/inbox/unprocessed"),
-    archive: () => fetchJson("/api/archive"),
+    inbox: () => fetchJson("/api/inbox/unprocessed?include_body=false"),
+    archive: () => fetchJson("/api/archive?include_body=false"),
     conversations: () => fetchJson("/api/conversations"),
-    emails: () => fetchJson("/api/emails"),
+    emails: () => fetchJson("/api/emails?include_body=false&limit=100"),
     invoices: () => fetchJson("/api/invoices"),
   };
   const requestedKeys = getRequiredDataKeys(role, state.activeView);
@@ -3145,12 +3195,12 @@ async function loadAll() {
   if (!state.selectedWorklogId || !state.worklogs.some((item) => item.id === state.selectedWorklogId)) {
     state.selectedWorklogId = state.worklogs[0]?.id || null;
   }
-  if (!state.selectedInboxKey) {
-    const inboxItems = getInboxItems();
+  const inboxItems = getInboxItems();
+  if (!state.selectedInboxKey || !inboxItems.some((item) => `${item.kind}:${item.id}` === state.selectedInboxKey)) {
     state.selectedInboxKey = inboxItems[0] ?`${inboxItems[0].kind}:${inboxItems[0].id}` : null;
   }
-  if (!state.selectedArchiveKey) {
-    const archiveItems = getArchiveItems();
+  const archiveItems = getArchiveItems();
+  if (!state.selectedArchiveKey || !archiveItems.some((item) => item.key === state.selectedArchiveKey)) {
     state.selectedArchiveKey = archiveItems[0]?.key || null;
   }
 
@@ -3164,6 +3214,15 @@ async function loadAll() {
     detailRequests.push(loadConversationDetail());
   } else if (state.activeView !== "conversations") {
     state.conversationDetail = null;
+  }
+  if (state.activeView === "emails" && state.selectedEmailId) {
+    detailRequests.push(loadEmailDetail(state.selectedEmailId));
+  }
+  if (state.activeView === "inbox" && state.selectedInboxKey?.startsWith("email:")) {
+    detailRequests.push(loadEmailDetail(state.selectedInboxKey.slice("email:".length)));
+  }
+  if (state.activeView === "archive" && state.selectedArchiveKey?.startsWith("email:")) {
+    detailRequests.push(loadEmailDetail(state.selectedArchiveKey.slice("email:".length)));
   }
   await Promise.all(detailRequests);
   renderApp();
@@ -3765,7 +3824,10 @@ function bindEvents() {
       }
       if (target.dataset.selectItem) {
         const [kind, rawId] = target.dataset.selectItem.split(":");
-        if (kind === "email") state.selectedEmailId = rawId;
+        if (kind === "email") {
+          state.selectedEmailId = rawId;
+          await loadEmailDetail(rawId);
+        }
         if (kind === "task") state.selectedTaskId = Number(rawId);
         if (kind === "project") {
           state.selectedProjectId = Number(rawId);
@@ -3825,6 +3887,7 @@ function bindEvents() {
         const emailId = target.dataset.emailId;
         if (action === "create_task") {
           state.modalTaskEmailId = emailId;
+          await loadEmailDetail(emailId);
           renderTaskFromEmailDialog();
           taskFromEmailDialog?.showModal();
           return;
@@ -3896,6 +3959,7 @@ function bindEvents() {
       }
       if (target.dataset.openEmail) {
         state.modalEmailId = target.dataset.openEmail;
+        await loadEmailDetail(state.modalEmailId);
         renderEmailDialog();
         emailDialog?.showModal();
         return;

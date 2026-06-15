@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User=www-data
 Group=www-data
-WorkingDirectory=/opt/lb-agent/app
+WorkingDirectory=/opt/lb-agent
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/opt/lb-agent/.venv/bin/python run_worker.py
 Restart=always

@@ -384,6 +384,32 @@ class TestWebApi(unittest.TestCase):
         second_project_detail = self.client.get(f"/api/projects/{second_project_id}").json()
         self.assertEqual(len(second_project_detail["emails"]), 1)
 
+    def test_email_list_can_omit_body_and_fetch_detail(self) -> None:
+        crud.create_email(
+            self.config,
+            Email(
+                id="email-slim-1",
+                thread_id="thread-slim-1",
+                sender="zakaznik@example.com",
+                subject="Dlouha poptavka",
+                body="Plny text e-mailu " * 80,
+                received_at="2026-04-17T09:00:00+00:00",
+            ),
+            summary="Strucny souhrn",
+        )
+
+        list_response = self.client.get("/api/emails?include_body=false&limit=1&offset=0")
+        self.assertEqual(list_response.status_code, 200)
+        payload = list_response.json()
+        self.assertEqual(payload["total"], 1)
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertNotIn("body", payload["items"][0])
+        self.assertEqual(payload["items"][0]["body_preview"], "Strucny souhrn")
+
+        detail_response = self.client.get("/api/emails/email-slim-1")
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertIn("Plny text e-mailu", detail_response.json()["item"]["body"])
+
     def test_project_photo_upload_keeps_worker_and_work_date(self) -> None:
         worker_response = self.client.post(
             "/api/workers",
