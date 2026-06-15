@@ -4,11 +4,11 @@ After=network.target
 
 [Service]
 Type=simple
-User=www-data
-Group=www-data
+User=blaze
 WorkingDirectory=/opt/lb-agent
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/lb-agent/.venv/bin/python -m uvicorn app.web.api:create_app --factory --host 127.0.0.1 --port 8000
+EnvironmentFile=/opt/lb-agent/.env
+ExecStart=/opt/lb-agent/.venv/bin/uvicorn app.web.api:create_app --factory --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5
 
