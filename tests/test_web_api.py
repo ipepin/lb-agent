@@ -864,6 +864,113 @@ class TestWebApi(unittest.TestCase):
         self.assertIsNotNone(done_item["completed_at"])
         self.assertEqual(done_item["completed_by"]["full_name"], "Pepa")
 
+    def test_task_planning_conflict_requires_force(self) -> None:
+        worker_response = self.client.post(
+            "/api/workers",
+            json={"full_name": "Kolizni Pracovnik", "email": "kolize@example.com"},
+        )
+        self.assertEqual(worker_response.status_code, 200)
+        worker_id = worker_response.json()["item"]["id"]
+
+        first_task = self.client.post(
+            "/api/tasks",
+            json={
+                "title": "Prvni zasah",
+                "priority": "high",
+                "planned_start_at": "2026-04-28T08:00:00",
+                "planned_end_at": "2026-04-28T10:00:00",
+                "assigned_worker_id": worker_id,
+                "assigned_worker_ids": [worker_id],
+            },
+        )
+        self.assertEqual(first_task.status_code, 200)
+
+        conflict_response = self.client.post(
+            "/api/tasks",
+            json={
+                "title": "Druhy zasah",
+                "priority": "high",
+                "planned_start_at": "2026-04-28T09:00:00",
+                "planned_end_at": "2026-04-28T11:00:00",
+                "assigned_worker_id": worker_id,
+                "assigned_worker_ids": [worker_id],
+            },
+        )
+        self.assertEqual(conflict_response.status_code, 409)
+        detail = conflict_response.json()["detail"]
+        self.assertEqual(detail["type"], "planning_conflict")
+        self.assertEqual(len(detail["conflicts"]), 1)
+        self.assertEqual(detail["conflicts"][0]["task_title"], "Prvni zasah")
+        self.assertEqual(detail["suggestion"]["planned_start_at"], "2026-04-28T10:00")
+
+        forced_response = self.client.post(
+            "/api/tasks",
+            json={
+                "title": "Druhy zasah",
+                "priority": "high",
+                "planned_start_at": "2026-04-28T09:00:00",
+                "planned_end_at": "2026-04-28T11:00:00",
+                "assigned_worker_id": worker_id,
+                "assigned_worker_ids": [worker_id],
+                "force": True,
+            },
+        )
+        self.assertEqual(forced_response.status_code, 200)
+
+    def test_calendar_action_blocks_conflicting_schedule_without_force(self) -> None:
+        worker_response = self.client.post(
+            "/api/workers",
+            json={"full_name": "Kalendar Kolize", "email": "kalendar@example.com"},
+        )
+        self.assertEqual(worker_response.status_code, 200)
+        worker_id = worker_response.json()["item"]["id"]
+
+        first_task = self.client.post(
+            "/api/tasks",
+            json={
+                "title": "Jiz naplanovano",
+                "planned_start_at": "2026-04-29T08:00:00",
+                "planned_end_at": "2026-04-29T10:00:00",
+                "assigned_worker_id": worker_id,
+                "assigned_worker_ids": [worker_id],
+                "force": True,
+            },
+        )
+        self.assertEqual(first_task.status_code, 200)
+        first_task_id = first_task.json()["item"]["id"]
+        first_calendar = self.client.post(
+            f"/api/tasks/{first_task_id}/action",
+            json={"action": "create_calendar_event", "force": True},
+        )
+        self.assertEqual(first_calendar.status_code, 200)
+
+        second_task = self.client.post(
+            "/api/tasks",
+            json={
+                "title": "Kolizni vyjezd",
+                "planned_start_at": "2026-04-29T09:00:00",
+                "planned_end_at": "2026-04-29T11:00:00",
+                "assigned_worker_id": worker_id,
+                "assigned_worker_ids": [worker_id],
+                "force": True,
+            },
+        )
+        self.assertEqual(second_task.status_code, 200)
+        second_task_id = second_task.json()["item"]["id"]
+
+        conflict_response = self.client.post(
+            f"/api/tasks/{second_task_id}/action",
+            json={"action": "create_calendar_event"},
+        )
+        self.assertEqual(conflict_response.status_code, 409)
+        self.assertEqual(conflict_response.json()["detail"]["type"], "planning_conflict")
+
+        forced_response = self.client.post(
+            f"/api/tasks/{second_task_id}/action",
+            json={"action": "create_calendar_event", "force": True},
+        )
+        self.assertEqual(forced_response.status_code, 200)
+
     def test_worklog_payment_summary_and_mark_paid(self) -> None:
         worker_response = self.client.post(
             "/api/workers",

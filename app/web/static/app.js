@@ -323,16 +323,21 @@ async function fetchJson(url, options = {}) {
   const response = await fetch(url, options);
   if (!response.ok) {
     let detail = `Chyba ${response.status}`;
+    let payload = null;
     const rawText = await response.text();
     if (rawText) {
       try {
-        const payload = JSON.parse(rawText);
+        payload = JSON.parse(rawText);
         detail = payload.detail || payload.message || rawText || detail;
       } catch {
         detail = rawText || detail;
       }
     }
-    throw new Error(detail);
+    const error = new Error(typeof detail === "string" ? detail : (detail?.message || `Chyba ${response.status}`));
+    error.status = response.status;
+    error.payload = payload;
+    error.detail = detail;
+    throw error;
   }
   return response.json();
 }
@@ -1293,6 +1298,26 @@ function renderTaskStatusOptions(selectedStatus = "pending") {
     .join("");
 }
 
+function renderPlanningConflictCard(task) {
+  const conflicts = task?.planning_conflicts || [];
+  if (!conflicts.length) return "";
+  const suggestion = task?.planning_suggestion || null;
+  return `
+    <div class="section-card">
+      <div class="panel-header"><div><h4>Kolize v plánu</h4><p>Vybraný termín se překrývá s jinou prací stejného pracovníka.</p></div></div>
+      <div class="detail-grid ai-detail-grid">
+        ${conflicts.map((conflict) => `
+          <div class="detail-item detail-item-wide">
+            <span class="detail-item-label">${escapeHtml((conflict.worker_names || []).join(", ") || "Pracovník")}</span>
+            <span class="detail-item-value">${escapeHtml(conflict.task_title || "Jiná akce")} · ${escapeHtml(formatDate(conflict.starts_at))}${conflict.ends_at ? ` -> ${escapeHtml(formatDate(conflict.ends_at))}` : ""}</span>
+          </div>
+        `).join("")}
+      </div>
+      ${suggestion?.planned_start_at ? `<div class="toolbar"><span class="selection-chip">Doporučený slot: ${escapeHtml(formatDate(suggestion.planned_start_at))}${suggestion.planned_end_at ? ` -> ${escapeHtml(formatDate(suggestion.planned_end_at))}` : ""}</span></div>` : ""}
+    </div>
+  `;
+}
+
 function renderWorkerStatusOptions(selectedStatus = "active") {
   return [
     ["active", "Aktivní"],
@@ -1481,6 +1506,7 @@ function renderTaskDetail(task) {
         <button type="button" class="button button-danger" data-task-action="archive" data-task-id="${task.id}">Archivovat</button>
         <button type="button" class="button button-danger" data-delete-task="${task.id}">Smazat</button>
       </div>
+      ${renderPlanningConflictCard(task)}
       <form id="task-update-form" class="compact-form" data-task-id="${task.id}">
         <div class="row">
           <input name="title" value="${escapeHtml(task.title)}" placeholder="Název úkolu" required>
@@ -3452,11 +3478,25 @@ async function performBulkEmailAction(action, emailIds, projectId = null) {
 }
 
 async function performTaskAction(taskId, action, projectId = null) {
-  const result = await fetchJson(`/api/tasks/${taskId}/action`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, project_id: projectId }),
-  });
+  let result;
+  try {
+    result = await fetchJson(`/api/tasks/${taskId}/action`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, project_id: projectId }),
+    });
+  } catch (error) {
+    const conflictPrompt = describePlanningConflict(error);
+    if (conflictPrompt && action === "create_calendar_event" && window.confirm(normalizeCzechText(conflictPrompt))) {
+      result = await fetchJson(`/api/tasks/${taskId}/action`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, project_id: projectId, force: true }),
+      });
+    } else {
+      throw error;
+    }
+  }
   await loadAll();
   if (action === "create_calendar_event") {
     if (result.synced_to_google) {
@@ -3528,6 +3568,18 @@ async function deleteEntity(kind, id) {
   });
   await loadAll();
   showMessage("ok", successMessages[kind] || "Záznam byl smazán.");
+}
+
+function describePlanningConflict(error) {
+  const detail = error?.payload?.detail || error?.detail || error?.payload || null;
+  if (!detail || detail.type !== "planning_conflict") return null;
+  const suggestion = detail.suggestion?.planned_start_at
+    ? `\nDoporučený slot: ${formatDate(detail.suggestion.planned_start_at)}${detail.suggestion.planned_end_at ? ` -> ${formatDate(detail.suggestion.planned_end_at)}` : ""}`
+    : "";
+  const conflictLines = (detail.conflicts || [])
+    .map((item) => `- ${(item.worker_names || []).join(", ") || "Pracovník"}: ${item.task_title || "Jiná akce"} (${formatDate(item.starts_at)}${item.ends_at ? ` -> ${formatDate(item.ends_at)}` : ""})`)
+    .join("\n");
+  return `${detail.message || "Plán koliduje s jinou prací."}${conflictLines ? `\n\n${conflictLines}` : ""}${suggestion}\n\nUložit i přes kolizi?`;
 }
 
 async function submitProjectForm(form) {
@@ -3610,11 +3662,22 @@ async function submitProjectTaskForm(form) {
   payload.planned_start_at = payload.planned_start_at || null;
   payload.planned_end_at = payload.planned_end_at || null;
   payload.due_date = payload.deadline_at;
-  await fetchJson(`/api/projects/${projectId}/tasks`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  try {
+    await fetchJson(`/api/projects/${projectId}/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    const conflictPrompt = describePlanningConflict(error);
+    if (!conflictPrompt || !window.confirm(normalizeCzechText(conflictPrompt))) throw error;
+    payload.force = true;
+    await fetchJson(`/api/projects/${projectId}/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
   state.projectSection = "tasks";
   taskDialog?.close();
   await loadAll();
@@ -3632,11 +3695,23 @@ async function submitTaskForm(form) {
   payload.planned_start_at = payload.planned_start_at || null;
   payload.planned_end_at = payload.planned_end_at || null;
   payload.due_date = payload.deadline_at;
-  const result = await fetchJson("/api/tasks", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  let result;
+  try {
+    result = await fetchJson("/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    const conflictPrompt = describePlanningConflict(error);
+    if (!conflictPrompt || !window.confirm(normalizeCzechText(conflictPrompt))) throw error;
+    payload.force = true;
+    result = await fetchJson("/api/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
   state.selectedTaskId = result.item?.id || null;
   taskDialog?.close();
   await loadAll();
@@ -3656,11 +3731,22 @@ async function submitTaskUpdateForm(form) {
   payload.planned_end_at = String(payload.planned_end_at || "").trim() || null;
   payload.due_date = payload.deadline_at;
 
-  await fetchJson(`/api/tasks/${taskId}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  try {
+    await fetchJson(`/api/tasks/${taskId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    const conflictPrompt = describePlanningConflict(error);
+    if (!conflictPrompt || !window.confirm(normalizeCzechText(conflictPrompt))) throw error;
+    payload.force = true;
+    await fetchJson(`/api/tasks/${taskId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
   await loadAll();
   state.selectedTaskId = taskId;
   showMessage("ok", "Úkol byl upraven.");
@@ -3684,23 +3770,33 @@ async function submitTaskFromEmailForm(form) {
   payload.planned_end_at = payload.planned_end_at || null;
   payload.due_date = payload.deadline_at;
 
-  const result = await fetchJson(`/api/emails/${encodeURIComponent(emailId)}/action`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      action: "create_task",
-      project_id: payload.project_id,
-      title: payload.title,
-      description: payload.description,
-      due_date: payload.due_date,
-      deadline_at: payload.deadline_at,
-      planned_start_at: payload.planned_start_at,
-      planned_end_at: payload.planned_end_at,
-      priority: payload.priority,
-      assigned_worker_id: payload.assigned_worker_id,
-      estimated_hours: payload.estimated_hours,
-    }),
-  });
+  const requestPayload = {
+    action: "create_task",
+    project_id: payload.project_id,
+    title: payload.title,
+    description: payload.description,
+    due_date: payload.due_date,
+    deadline_at: payload.deadline_at,
+    planned_start_at: payload.planned_start_at,
+    planned_end_at: payload.planned_end_at,
+    priority: payload.priority,
+    assigned_worker_id: payload.assigned_worker_id,
+    assigned_worker_ids: payload.assigned_worker_ids,
+    estimated_hours: payload.estimated_hours,
+  };
+  let result;
+  try {
+    result = await fetchJson(`/api/emails/${encodeURIComponent(emailId)}/action`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestPayload),
+    });
+  } catch (error) {
+    const conflictPrompt = describePlanningConflict(error);
+    if (!conflictPrompt) throw error;
+    showMessage("error", normalizeCzechText(conflictPrompt.replace(/\n\nUložit i přes kolizi\?$/, "")));
+    return;
+  }
 
   state.selectedTaskId = result.created_task_id || null;
   state.modalTaskEmailId = null;

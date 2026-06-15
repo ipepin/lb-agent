@@ -118,6 +118,7 @@ class BulkEmailActionPayload(BaseModel):
 class TaskActionPayload(BaseModel):
     action: str
     project_id: int | None = None
+    force: bool = False
 
 
 class BulkTaskActionPayload(BaseModel):
@@ -138,6 +139,7 @@ class ProjectTaskCreatePayload(BaseModel):
     assigned_worker_id: int | None = None
     assigned_worker_ids: list[int] = []
     estimated_hours: float | None = None
+    force: bool = False
 
 
 class TaskCreatePayload(ProjectTaskCreatePayload):
@@ -282,6 +284,202 @@ def _resolve_task_event_window(task: Any) -> tuple[str, str]:
     return starts_at, ends_at
 
 
+def _parse_iso_datetime(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _normalize_task_worker_ids(task: Any) -> list[int]:
+    worker_ids = [int(worker_id) for worker_id in (getattr(task, "worker_ids", None) or []) if worker_id is not None]
+    assigned_worker_id = getattr(task, "assigned_worker_id", None)
+    if assigned_worker_id is not None and int(assigned_worker_id) not in worker_ids:
+        worker_ids.append(int(assigned_worker_id))
+    return list(dict.fromkeys(worker_ids))
+
+
+def _merge_intervals(intervals: list[tuple[datetime, datetime]]) -> list[tuple[datetime, datetime]]:
+    if not intervals:
+        return []
+    ordered = sorted(intervals, key=lambda item: item[0])
+    merged = [ordered[0]]
+    for start_at, end_at in ordered[1:]:
+        last_start, last_end = merged[-1]
+        if start_at <= last_end:
+            merged[-1] = (last_start, max(last_end, end_at))
+            continue
+        merged.append((start_at, end_at))
+    return merged
+
+
+def _build_suggested_slot(
+    desired_start: datetime,
+    duration: timedelta,
+    intervals: list[tuple[datetime, datetime]],
+) -> tuple[str, str] | None:
+    if duration.total_seconds() <= 0:
+        duration = timedelta(hours=1)
+    candidate = desired_start
+    merged = _merge_intervals(intervals)
+    for _ in range(32):
+        candidate_end = candidate + duration
+        overlap = next(
+            (
+                (busy_start, busy_end)
+                for busy_start, busy_end in merged
+                if candidate < busy_end and candidate_end > busy_start
+            ),
+            None,
+        )
+        if overlap is None:
+            return (
+                candidate.isoformat(timespec="minutes"),
+                candidate_end.isoformat(timespec="minutes"),
+            )
+        candidate = overlap[1]
+    return None
+
+
+def _find_planning_conflicts(
+    config: AppConfig,
+    *,
+    task_id: int | None,
+    worker_ids: list[int],
+    starts_at: str,
+    ends_at: str,
+) -> tuple[list[dict[str, Any]], dict[str, str] | None]:
+    if not worker_ids:
+        return [], None
+    desired_start = _parse_iso_datetime(starts_at)
+    desired_end = _parse_iso_datetime(ends_at)
+    if desired_end <= desired_start:
+        desired_end = desired_start + timedelta(hours=1)
+    conflicts: list[dict[str, Any]] = []
+    busy_intervals: list[tuple[datetime, datetime]] = []
+
+    for other_task in crud.list_tasks(config):
+        if task_id is not None and int(other_task.id) == int(task_id):
+            continue
+        if other_task.status in {"done", "archived"}:
+            continue
+        other_worker_ids = _normalize_task_worker_ids(other_task)
+        shared_worker_ids = [worker_id for worker_id in worker_ids if worker_id in other_worker_ids]
+        if not shared_worker_ids:
+            continue
+        other_start_raw = getattr(other_task, "planned_start_at", None) or None
+        if not other_start_raw:
+            continue
+        other_end_raw = getattr(other_task, "planned_end_at", None) or _event_end_from_start(
+            other_start_raw,
+            getattr(other_task, "estimated_hours", None),
+        )
+        other_start = _parse_iso_datetime(other_start_raw)
+        other_end = _parse_iso_datetime(other_end_raw)
+        busy_intervals.append((other_start, other_end))
+        if desired_start < other_end and desired_end > other_start:
+            conflicts.append(
+                {
+                    "task_id": other_task.id,
+                    "task_title": other_task.title,
+                    "starts_at": other_start_raw,
+                    "ends_at": other_end_raw,
+                    "worker_ids": shared_worker_ids,
+                    "worker_names": [
+                        crud.get_worker(config, worker_id).full_name
+                        for worker_id in shared_worker_ids
+                        if crud.get_worker(config, worker_id) is not None
+                    ],
+                    "project_id": other_task.project_id,
+                }
+            )
+
+    for event in crud.list_calendar_events(config):
+        if event.task_id is not None:
+            continue
+        event_worker_id = event.assigned_worker_id
+        if event_worker_id is None or int(event_worker_id) not in worker_ids:
+            continue
+        event_start = _parse_iso_datetime(event.starts_at)
+        event_end = _parse_iso_datetime(event.ends_at or event.starts_at)
+        busy_intervals.append((event_start, event_end))
+        if desired_start < event_end and desired_end > event_start:
+            conflicts.append(
+                {
+                    "calendar_event_id": event.id,
+                    "task_id": event.task_id,
+                    "task_title": event.title,
+                    "starts_at": event.starts_at,
+                    "ends_at": event.ends_at or event.starts_at,
+                    "worker_ids": [int(event_worker_id)],
+                    "worker_names": [
+                        crud.get_worker(config, int(event_worker_id)).full_name
+                        for _ in [0]
+                        if crud.get_worker(config, int(event_worker_id)) is not None
+                    ],
+                    "project_id": event.project_id,
+                }
+            )
+
+    deduped_conflicts: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    for conflict in conflicts:
+        key = "|".join(
+            [
+                str(conflict.get("task_id") or ""),
+                str(conflict.get("calendar_event_id") or ""),
+                str(conflict.get("starts_at") or ""),
+                str(conflict.get("ends_at") or ""),
+            ]
+        )
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped_conflicts.append(conflict)
+
+    suggestion = _build_suggested_slot(desired_start, desired_end - desired_start, busy_intervals) if deduped_conflicts else None
+    return deduped_conflicts, (
+        {"planned_start_at": suggestion[0], "planned_end_at": suggestion[1]}
+        if suggestion is not None
+        else None
+    )
+
+
+def _planning_conflict_detail(
+    config: AppConfig,
+    *,
+    task_id: int | None,
+    title: str,
+    worker_ids: list[int],
+    starts_at: str,
+    ends_at: str,
+) -> dict[str, Any] | None:
+    conflicts, suggestion = _find_planning_conflicts(
+        config,
+        task_id=task_id,
+        worker_ids=worker_ids,
+        starts_at=starts_at,
+        ends_at=ends_at,
+    )
+    if not conflicts:
+        return None
+    worker_names = [
+        worker.full_name
+        for worker_id in worker_ids
+        for worker in [crud.get_worker(config, int(worker_id))]
+        if worker is not None
+    ]
+    return {
+        "message": f"Plán úkolu „{title}“ koliduje s jinou prací.",
+        "type": "planning_conflict",
+        "conflicts": conflicts,
+        "requested": {
+            "planned_start_at": starts_at,
+            "planned_end_at": ends_at,
+            "worker_ids": worker_ids,
+            "worker_names": worker_names,
+        },
+        "suggestion": suggestion,
+    }
+
+
 def _serialize_task(config: AppConfig, item: Any) -> dict[str, Any]:
     payload = asdict(item)
     payload["deadline_at"] = _task_deadline(item)
@@ -409,6 +607,21 @@ def _serialize_task(config: AppConfig, item: Any) -> dict[str, Any]:
     )
     payload["calendar_events"] = calendar_events_payload
     payload["latest_calendar_event"] = calendar_events_payload[-1] if calendar_events_payload else None
+    payload["planning_conflicts"] = []
+    payload["planning_suggestion"] = None
+    if planned_start and workers:
+        effective_end = planned_end or _event_end_from_start(planned_start, item.estimated_hours)
+        conflict_detail = _planning_conflict_detail(
+            config,
+            task_id=item.id,
+            title=item.title,
+            worker_ids=[worker["id"] for worker in workers],
+            starts_at=planned_start,
+            ends_at=effective_end,
+        )
+        if conflict_detail is not None:
+            payload["planning_conflicts"] = conflict_detail["conflicts"]
+            payload["planning_suggestion"] = conflict_detail["suggestion"]
     payload["timeline"] = sorted(
         timeline,
         key=lambda entry: entry.get("at") or "",
@@ -827,6 +1040,21 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             project = project_service.get_project(payload.project_id)
             if project is None:
                 raise HTTPException(status_code=404, detail="Zakázka nebyla nalezena.")
+        planning_start = (payload.planned_start_at or "").strip() or None
+        planning_end = (payload.planned_end_at or "").strip() or None
+        if planning_start:
+            effective_end = planning_end or _event_end_from_start(planning_start, payload.estimated_hours)
+            worker_ids = list(dict.fromkeys([int(worker_id) for worker_id in payload.assigned_worker_ids if worker_id] + ([int(payload.assigned_worker_id)] if payload.assigned_worker_id is not None else [])))
+            conflict_detail = _planning_conflict_detail(
+                active_config,
+                task_id=None,
+                title=payload.title,
+                worker_ids=worker_ids,
+                starts_at=planning_start,
+                ends_at=effective_end,
+            )
+            if conflict_detail is not None and not payload.force:
+                raise HTTPException(status_code=409, detail=conflict_detail)
 
         task_id = task_service.create_task(
             title=payload.title,
@@ -853,6 +1081,21 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             project = project_service.get_project(payload.project_id)
             if project is None:
                 raise HTTPException(status_code=404, detail="Zakázka nebyla nalezena.")
+        planning_start = (payload.planned_start_at or "").strip() or None
+        planning_end = (payload.planned_end_at or "").strip() or None
+        if planning_start:
+            effective_end = planning_end or _event_end_from_start(planning_start, payload.estimated_hours)
+            worker_ids = list(dict.fromkeys([int(worker_id) for worker_id in payload.assigned_worker_ids if worker_id] + ([int(payload.assigned_worker_id)] if payload.assigned_worker_id is not None else [])))
+            conflict_detail = _planning_conflict_detail(
+                active_config,
+                task_id=task_id,
+                title=payload.title,
+                worker_ids=worker_ids,
+                starts_at=planning_start,
+                ends_at=effective_end,
+            )
+            if conflict_detail is not None and not payload.force:
+                raise HTTPException(status_code=409, detail=conflict_detail)
 
         updated = task_service.update_task(
             task_id,
@@ -917,6 +1160,21 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 project = project_service.get_project(payload.project_id)
                 if project is None:
                     raise HTTPException(status_code=404, detail="Zakázka nebyla nalezena.")
+            planning_start = (payload.planned_start_at or "").strip() or None
+            planning_end = (payload.planned_end_at or "").strip() or None
+            if planning_start:
+                effective_end = planning_end or _event_end_from_start(planning_start, payload.estimated_hours)
+                worker_ids = list(dict.fromkeys([int(worker_id) for worker_id in payload.assigned_worker_ids if worker_id] + ([int(payload.assigned_worker_id)] if payload.assigned_worker_id is not None else [])))
+                conflict_detail = _planning_conflict_detail(
+                    active_config,
+                    task_id=None,
+                    title=(payload.title or "").strip() or email.subject,
+                    worker_ids=worker_ids,
+                    starts_at=planning_start,
+                    ends_at=effective_end,
+                )
+                if conflict_detail is not None:
+                    raise HTTPException(status_code=409, detail=conflict_detail)
             task_id = task_service.create_task(
                 title=(payload.title or "").strip() or email.subject,
                 description=(payload.description or "").strip() or parsed.summary or email.body[:500],
@@ -1150,6 +1408,16 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
         if payload.action == "create_calendar_event":
             starts_at, ends_at = _resolve_task_event_window(task)
+            conflict_detail = _planning_conflict_detail(
+                active_config,
+                task_id=task.id,
+                title=task.title,
+                worker_ids=_normalize_task_worker_ids(task),
+                starts_at=starts_at,
+                ends_at=ends_at,
+            )
+            if conflict_detail is not None and not payload.force:
+                raise HTTPException(status_code=409, detail=conflict_detail)
             project = (
                 project_service.get_project(task.project_id)
                 if task.project_id is not None
@@ -1330,6 +1598,21 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         project = project_service.get_project(project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Zakázka nebyla nalezena.")
+        planning_start = (payload.planned_start_at or "").strip() or None
+        planning_end = (payload.planned_end_at or "").strip() or None
+        if planning_start:
+            effective_end = planning_end or _event_end_from_start(planning_start, payload.estimated_hours)
+            worker_ids = list(dict.fromkeys([int(worker_id) for worker_id in payload.assigned_worker_ids if worker_id] + ([int(payload.assigned_worker_id)] if payload.assigned_worker_id is not None else [])))
+            conflict_detail = _planning_conflict_detail(
+                active_config,
+                task_id=None,
+                title=payload.title,
+                worker_ids=worker_ids,
+                starts_at=planning_start,
+                ends_at=effective_end,
+            )
+            if conflict_detail is not None and not payload.force:
+                raise HTTPException(status_code=409, detail=conflict_detail)
 
         task_id = task_service.create_task(
             title=payload.title,
