@@ -835,6 +835,13 @@ function buildAiActionLabel(action) {
     create_calendar_event: "Zapsat termin",
     draft_email_reply: "Navrhnout odpoved",
     create_project: "Vytvorit zakazku",
+    assign_project: "Priradit k zakazce",
+    mark_invoice: "Oznacit jako fakturu",
+    track: "Sledovat",
+    ignore: "Ignorovat",
+    archive: "Archivovat",
+    restore: "Obnovit",
+    return_unprocessed: "Vratit do neroztridenych",
   };
   return labels[action] || action || "-";
 }
@@ -1286,6 +1293,8 @@ function renderEmailDetail(email) {
   const ai = getEmailAiSuggestion(email);
   const classification = ai.classification || {};
   const parsed = ai.parsed_email || {};
+  const userDecision = ai.user_decision || {};
+  const confirmedBy = userDecision.confirmed_by || {};
   const aiCards = [
     { label: "Doporucena akce", value: buildAiActionLabel(classification.action) },
     { label: "Duvěra", value: classification.confidence != null ? `${Math.round(Number(classification.confidence || 0) * 100)} %` : "-" },
@@ -1363,6 +1372,14 @@ function renderEmailDetail(email) {
             <div class="detail-item"><span class="detail-item-label">Pozadovana cinnost</span><span class="detail-item-value">${escapeHtml(parsed.requested_action || "-")}</span></div>
             <div class="detail-item"><span class="detail-item-label">Faktura</span><span class="detail-item-value">${escapeHtml(parsed.invoice_number || "-")}</span></div>
           </div>
+          ${userDecision.action ? `
+            <div class="detail-grid ai-detail-grid">
+              <div class="detail-item"><span class="detail-item-label">Potvrzena akce</span><span class="detail-item-value">${escapeHtml(buildAiActionLabel(userDecision.action))}</span></div>
+              <div class="detail-item"><span class="detail-item-label">Potvrdil</span><span class="detail-item-value">${escapeHtml(confirmedBy.full_name || confirmedBy.email || "-")}</span></div>
+              <div class="detail-item"><span class="detail-item-label">Potvrzeno</span><span class="detail-item-value">${userDecision.confirmed_at ? formatDate(userDecision.confirmed_at, true) : "-"}</span></div>
+              <div class="detail-item"><span class="detail-item-label">Shoda s AI</span><span class="detail-item-value">${userDecision.matches_ai_suggestion === true ? "Ano" : userDecision.matches_ai_suggestion === false ? "Ne" : "-"}</span></div>
+            </div>
+          ` : ""}
           ${aiSuggestedActions.length ? `<div class="toolbar">${aiSuggestedActions.map((item) => `<span class="chip">${escapeHtml(item)}</span>`).join("")}</div>` : ""}
           ${aiActionButtons.length ? `<div class="toolbar">${aiActionButtons.join("")}</div>` : ""}
           ${parsed.draft_reply ? `

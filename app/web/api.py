@@ -27,6 +27,7 @@ from app.services.reminder_service import ReminderService
 from app.services.task_service import TaskService
 from app.services.worker_service import WorkerService
 from app.services.worklog_service import WorkLogService
+from app.utils.dates import utc_now_iso
 
 
 class ProjectCreatePayload(BaseModel):
@@ -196,6 +197,45 @@ def _serialize_email(config: AppConfig, item: Any, *, include_body: bool = True)
     payload["project_ids"] = project_ids
     payload["projects"] = projects
     return payload
+
+
+def _record_email_user_decision(
+    config: AppConfig,
+    email_model: Any,
+    payload: EmailActionPayload,
+    result: dict[str, object],
+    user: UserModel,
+) -> None:
+    ai_payload = dict(email_model.ai_payload or {})
+    suggested_action = ((ai_payload.get("classification") or {}).get("action") or "").strip()
+    decision = {
+        "action": payload.action,
+        "confirmed_at": utc_now_iso(),
+        "confirmed_by": {
+            "id": user.id,
+            "full_name": user.full_name,
+            "email": user.email,
+        },
+        "project_id": payload.project_id,
+        "title": (payload.title or "").strip() or None,
+        "description": (payload.description or "").strip() or None,
+        "due_date": (payload.due_date or "").strip() or None,
+        "priority": (payload.priority or "").strip() or None,
+        "assigned_worker_id": payload.assigned_worker_id,
+        "assigned_worker_ids": list(payload.assigned_worker_ids or []),
+        "estimated_hours": payload.estimated_hours,
+        "matches_ai_suggestion": payload.action == suggested_action if suggested_action else None,
+        "result": {
+            key: value
+            for key, value in result.items()
+            if key not in {"status", "action"}
+        },
+    }
+    history = list(ai_payload.get("decision_history") or [])
+    history.append(decision)
+    ai_payload["user_decision"] = decision
+    ai_payload["decision_history"] = history[-20:]
+    crud.update_email_ai_payload(config, email_model.id, ai_payload)
 
 
 def _serialize_document(item: Any) -> dict[str, Any]:
@@ -800,7 +840,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
         return FileResponse(attachment_path)
 
-    def _apply_email_action(email_id: str, payload: EmailActionPayload) -> dict[str, object]:
+    def _apply_email_action(email_id: str, payload: EmailActionPayload, user: UserModel) -> dict[str, object]:
         email_model = crud.get_email(active_config, email_id)
         if email_model is None:
             raise HTTPException(status_code=404, detail="E-mail nebyl nalezen.")
@@ -834,7 +874,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             )
             crud.update_email_category(active_config, email.id, "task")
             crud.update_email_status(active_config, email.id, "confirmed")
-            return {"status": "ok", "action": action, "created_task_id": task_id}
+            result = {"status": "ok", "action": action, "created_task_id": task_id}
+            _record_email_user_decision(active_config, email_model, payload, result, user)
+            return result
 
         if action == "create_project":
             parsed = parser_service.parse_message(
@@ -860,7 +902,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             project_document_service.import_email_attachments(project_id=project_id, email_id=email.id)
             crud.update_email_category(active_config, email.id, "new_order")
             crud.update_email_status(active_config, email.id, "confirmed")
-            return {"status": "ok", "action": action, "project_id": project_id}
+            result = {"status": "ok", "action": action, "project_id": project_id}
+            _record_email_user_decision(active_config, email_model, payload, result, user)
+            return result
 
         if action == "assign_project":
             if payload.project_id is None:
@@ -875,7 +919,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                     email_id=email.id,
                 )
             crud.update_email_status(active_config, email.id, "confirmed")
-            return {"status": "ok", "action": action, "project_id": payload.project_id}
+            result = {"status": "ok", "action": action, "project_id": payload.project_id}
+            _record_email_user_decision(active_config, email_model, payload, result, user)
+            return result
 
         if action == "create_invoice":
             classification = EmailClassification(
@@ -910,36 +956,50 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                     related_type="invoice",
                     related_id=email.id,
                 )
-            return {"status": "ok", "action": action, "created_invoice_id": invoice_id}
+            result = {"status": "ok", "action": action, "created_invoice_id": invoice_id}
+            _record_email_user_decision(active_config, email_model, payload, result, user)
+            return result
 
         if action == "track":
             crud.update_email_category(active_config, email.id, "general")
             crud.update_email_status(active_config, email.id, "confirmed")
-            return {"status": "ok", "action": action}
+            result = {"status": "ok", "action": action}
+            _record_email_user_decision(active_config, email_model, payload, result, user)
+            return result
 
         if action == "ignore":
             crud.update_email_category(active_config, email.id, "general")
             crud.update_email_status(active_config, email.id, "confirmed")
-            return {"status": "ok", "action": action}
+            result = {"status": "ok", "action": action}
+            _record_email_user_decision(active_config, email_model, payload, result, user)
+            return result
 
         if action == "mark_invoice":
             crud.update_email_category(active_config, email.id, "invoice")
             crud.update_email_status(active_config, email.id, "confirmed")
-            return {"status": "ok", "action": action}
+            result = {"status": "ok", "action": action}
+            _record_email_user_decision(active_config, email_model, payload, result, user)
+            return result
 
         if action == "archive":
             crud.update_email_status(active_config, email.id, "archived")
-            return {"status": "ok", "action": action}
+            result = {"status": "ok", "action": action}
+            _record_email_user_decision(active_config, email_model, payload, result, user)
+            return result
 
         if action == "restore":
             crud.update_email_status(active_config, email.id, "pending")
-            return {"status": "ok", "action": action}
+            result = {"status": "ok", "action": action}
+            _record_email_user_decision(active_config, email_model, payload, result, user)
+            return result
 
         if action == "return_unprocessed":
             project_service.clear_email_assignments(email.id)
             crud.update_email_category(active_config, email.id, "uncategorized")
             crud.update_email_status(active_config, email.id, "pending")
-            return {"status": "ok", "action": action}
+            result = {"status": "ok", "action": action}
+            _record_email_user_decision(active_config, email_model, payload, result, user)
+            return result
 
         if action == "create_calendar_event":
             classification = EmailClassification(
@@ -965,7 +1025,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             crud.update_email_category(active_config, email.id, "calendar")
             crud.update_email_status(active_config, email.id, "confirmed")
             stored_event = crud.get_calendar_event(active_config, event_id)
-            return {
+            result = {
                 "status": "ok",
                 "action": action,
                 "created_event_id": event_id,
@@ -973,17 +1033,19 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 "calendar_id": stored_event.calendar_id if stored_event else "",
                 "external_event_id": stored_event.external_event_id if stored_event else "",
             }
+            _record_email_user_decision(active_config, email_model, payload, result, user)
+            return result
 
         raise HTTPException(status_code=400, detail="Neznámá akce pro e-mail.")
 
     @app.post("/api/emails/{email_id}/action")
     def apply_email_action(email_id: str, payload: EmailActionPayload, request: Request) -> dict[str, object]:
-        require_roles(request, ROLE_OWNER, ROLE_ADMIN)
-        return _apply_email_action(email_id, payload)
+        user = require_roles(request, ROLE_OWNER, ROLE_ADMIN)
+        return _apply_email_action(email_id, payload, user)
 
     @app.post("/api/emails/bulk-action")
     def apply_bulk_email_action(payload: BulkEmailActionPayload, request: Request) -> dict[str, object]:
-        require_roles(request, ROLE_OWNER, ROLE_ADMIN)
+        user = require_roles(request, ROLE_OWNER, ROLE_ADMIN)
         if not payload.email_ids:
             raise HTTPException(status_code=400, detail="Nebyl vybrán žádný e-mail.")
 
@@ -991,6 +1053,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             _apply_email_action(
                 email_id,
                 EmailActionPayload(action=payload.action, project_id=payload.project_id),
+                user,
             )
             for email_id in payload.email_ids
         ]

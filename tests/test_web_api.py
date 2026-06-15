@@ -275,6 +275,15 @@ class TestWebApi(unittest.TestCase):
                 received_at="2026-04-18T08:00:00+00:00",
             ),
             summary="Poptávka",
+            ai_payload={
+                "classification": {
+                    "category": "task",
+                    "action": "create_task",
+                    "priority": "normal",
+                    "needs_reply": False,
+                    "confidence": 0.91,
+                }
+            },
         )
 
         action_response = self.client.post(
@@ -293,6 +302,11 @@ class TestWebApi(unittest.TestCase):
         self.assertIsNotNone(email)
         self.assertEqual(email.category, "task")
         self.assertEqual(email.status, "confirmed")
+        self.assertEqual(email.ai_payload["user_decision"]["action"], "create_task")
+        self.assertEqual(email.ai_payload["user_decision"]["confirmed_by"]["email"], self.config.bootstrap_owner_email)
+        self.assertTrue(email.ai_payload["user_decision"]["matches_ai_suggestion"])
+        self.assertEqual(len(email.ai_payload["decision_history"]), 1)
+        self.assertEqual(email.ai_payload["user_decision"]["result"]["created_task_id"], tasks_payload[0]["id"])
 
     def test_email_create_task_action_accepts_custom_dialog_values(self) -> None:
         crud.create_email(
@@ -437,6 +451,13 @@ class TestWebApi(unittest.TestCase):
                     "suggested_actions": ["zapsat termin", "odeslat potvrzeni"],
                     "draft_reply": "Termin 25. 4. v 10:00 potvrzuji.",
                 },
+                "user_decision": {
+                    "action": "create_task",
+                    "confirmed_at": "2026-04-18T09:00:00+00:00",
+                    "confirmed_by": {"id": 1, "full_name": "Owner", "email": "owner@example.com"},
+                    "matches_ai_suggestion": False,
+                    "result": {"created_task_id": 12},
+                },
             },
         )
 
@@ -445,6 +466,8 @@ class TestWebApi(unittest.TestCase):
         payload = detail_response.json()["item"]["ai_triage"]
         self.assertEqual(payload["classification"]["action"], "create_calendar_event")
         self.assertEqual(payload["parsed_email"]["requested_deadline"], "2026-04-25T10:00:00")
+        self.assertEqual(payload["user_decision"]["action"], "create_task")
+        self.assertFalse(payload["user_decision"]["matches_ai_suggestion"])
 
     def test_project_photo_upload_keeps_worker_and_work_date(self) -> None:
         worker_response = self.client.post(
