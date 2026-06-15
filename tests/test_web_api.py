@@ -1,6 +1,7 @@
 ﻿import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -785,6 +786,50 @@ class TestWebApi(unittest.TestCase):
         self.assertEqual(task_payload["planned_end_at"], "2026-04-22T11:00:00")
         self.assertEqual(task_payload["latest_calendar_event"]["attendee_emails"], ["petr@example.com"])
         self.assertTrue(any(entry["kind"] == "calendar" for entry in task_payload["timeline"]))
+
+    def test_task_calendar_action_retries_google_export_for_existing_local_event(self) -> None:
+        worker_response = self.client.post(
+            "/api/workers",
+            json={"full_name": "Petr Svoboda", "email": "petr@example.com"},
+        )
+        self.assertEqual(worker_response.status_code, 200)
+        worker_id = worker_response.json()["item"]["id"]
+
+        task_response = self.client.post(
+            "/api/tasks",
+            json={
+                "title": "Lokalni plan",
+                "priority": "high",
+                "planned_start_at": "2026-04-23T09:30:00",
+                "planned_end_at": "2026-04-23T11:00:00",
+                "assigned_worker_id": worker_id,
+            },
+        )
+        self.assertEqual(task_response.status_code, 200)
+        task_id = task_response.json()["item"]["id"]
+
+        local_calendar_response = self.client.post(
+            f"/api/tasks/{task_id}/action",
+            json={"action": "create_calendar_event"},
+        )
+        self.assertEqual(local_calendar_response.status_code, 200)
+        self.assertFalse(local_calendar_response.json()["synced_to_google"])
+
+        self.config.google_calendar_id = "team-calendar@example.com"
+        with patch("app.integrations.calendar_api.CalendarApiClient.create_event", return_value="gcal-event-2"):
+            synced_calendar_response = self.client.post(
+                f"/api/tasks/{task_id}/action",
+                json={"action": "create_calendar_event"},
+            )
+
+        self.assertEqual(synced_calendar_response.status_code, 200)
+        self.assertTrue(synced_calendar_response.json()["synced_to_google"])
+        self.assertEqual(synced_calendar_response.json()["external_event_id"], "gcal-event-2")
+
+        events = crud.list_calendar_events(self.config)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].external_event_id, "gcal-event-2")
+        self.assertEqual(events[0].calendar_id, "team-calendar@example.com")
 
     def test_task_can_be_updated(self) -> None:
         worker_response = self.client.post(

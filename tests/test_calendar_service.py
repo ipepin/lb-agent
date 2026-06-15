@@ -5,6 +5,7 @@ from pathlib import Path
 from app.config import AppConfig
 from app.db import crud
 from app.db.database import initialize_database
+from app.schemas.entities import CalendarEvent
 from app.services.calendar_service import CalendarService
 
 
@@ -98,6 +99,34 @@ class TestCalendarService(unittest.TestCase):
         self.assertEqual(stored_event.external_event_id, "gcal-event-1")
         self.assertEqual(stored_event.project_id, 5)
         self.assertEqual(stored_event.assigned_worker_id, 2)
+
+    def test_sync_existing_event_updates_external_metadata(self) -> None:
+        fake_client = FakeCalendarClient()
+        service = CalendarService(self.config, client=fake_client)
+
+        event_id = crud.create_calendar_event(
+            self.config,
+            CalendarEvent(
+                title="Lokální plán",
+                starts_at="2026-04-21T08:00:00+02:00",
+                ends_at="2026-04-21T10:00:00+02:00",
+                description="Pouze dashboard",
+                location="Brno",
+                status="proposed",
+                task_id=7,
+                project_id=8,
+                assigned_worker_id=3,
+                attendee_emails=["technik@example.com"],
+            ),
+        )
+
+        stored_event = service.sync_existing_event(event_id)
+
+        self.assertIsNotNone(stored_event)
+        assert stored_event is not None
+        self.assertEqual(stored_event.status, "scheduled")
+        self.assertEqual(stored_event.calendar_id, "team-calendar@example.com")
+        self.assertEqual(stored_event.external_event_id, "gcal-event-1")
 
 
 if __name__ == "__main__":

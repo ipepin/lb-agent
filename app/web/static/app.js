@@ -438,7 +438,29 @@ function getPaymentStatusLabel(status) {
 function getTaskCalendarStatusLabel(event) {
   if (!event) return "Bez kalendáře";
   if (event.external_event_id) return "Zapsáno v Google Kalendáři";
+  if (event.synthetic) return "Jen v dashboard plánu";
   return "Uloženo jen lokálně";
+}
+
+function getTaskGoogleActionLabel(event) {
+  if (event?.external_event_id) return "Znovu exportovat do Google";
+  return "Přidat do Google kalendáře";
+}
+
+function renderTaskCalendarSyncSummary(task) {
+  const latestCalendarEvent = task?.latest_calendar_event || null;
+  const plannedStartAt = getTaskPlannedStart(task);
+  const plannedEndAt = getTaskPlannedEnd(task);
+  const dashboardValue = plannedStartAt
+    ? `${formatDate(plannedStartAt)}${plannedEndAt ? ` -> ${formatDate(plannedEndAt)}` : ""}`
+    : "Nenaplánováno";
+  const googleValue = latestCalendarEvent?.external_event_id ? "Zapsáno" : "Nezapsáno";
+  return `
+    <div class="toolbar">
+      <span class="chip">${escapeHtml(`Dashboard: ${dashboardValue}`)}</span>
+      <span class="chip">${escapeHtml(`Google: ${googleValue}`)}</span>
+    </div>
+  `;
 }
 
 function getPriorityClass(priority) {
@@ -1557,12 +1579,13 @@ function renderTaskDetail(task) {
       </div>
       <div class="toolbar">
         <button type="button" class="button button-primary" data-task-action="complete" data-task-id="${task.id}">DokonÄŤit</button>
-        <button type="button" class="button button-secondary" data-task-action="create_calendar_event" data-task-id="${task.id}">Přidat do Google kalendáře</button>
+        <button type="button" class="button button-secondary" data-task-action="create_calendar_event" data-task-id="${task.id}">${escapeHtml(getTaskGoogleActionLabel(latestCalendarEvent))}</button>
         <button type="button" class="button button-secondary" data-task-email="${task.id}">Poslat e-mailem</button>
         <button type="submit" form="task-update-form" class="button button-primary">Uložit změny</button>
         <button type="button" class="button button-danger" data-task-action="archive" data-task-id="${task.id}">Archivovat</button>
         <button type="button" class="button button-danger" data-delete-task="${task.id}">Smazat</button>
       </div>
+      ${renderTaskCalendarSyncSummary(task)}
       ${renderPlanningConflictCard(task)}
       <form id="task-update-form" class="compact-form" data-task-id="${task.id}">
         <div class="row">

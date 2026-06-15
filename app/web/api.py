@@ -1449,6 +1449,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 None,
             )
             if existing_event is not None:
+                if not existing_event.external_event_id:
+                    synced_event = calendar_service.sync_existing_event(existing_event.id)
+                    existing_event = synced_event or existing_event
                 crud.update_task_status(active_config, task_id, "scheduled")
                 return {
                     "status": "ok",

@@ -984,6 +984,27 @@ def get_calendar_event(config: AppConfig, event_id: int) -> CalendarEventModel |
     )
 
 
+def update_calendar_event_sync(
+    config: AppConfig,
+    event_id: int,
+    *,
+    status: str,
+    calendar_id: str,
+    external_event_id: str,
+) -> bool:
+    with get_connection(config.db_path) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE calendar_events
+            SET status = ?, calendar_id = ?, external_event_id = ?
+            WHERE id = ?
+            """,
+            (status, calendar_id, external_event_id, event_id),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+
+
 def create_worker(config: AppConfig, worker: Worker) -> int:
     with get_connection(config.db_path) as connection:
         cursor = connection.execute(

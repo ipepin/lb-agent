@@ -164,7 +164,8 @@ def run_browser_flow(base_url: str) -> None:
         dismiss_message_dialog(page)
         expect(page.locator(".list-stack")).to_contain_text("E2E plánovaný úkol")
 
-        page.locator('[data-select-item^="task:"]').filter(has_text="E2E plánovaný úkol").click()
+        dismiss_message_dialog(page)
+        page.locator('[data-select-item^="task:"]').filter(has_text="E2E plánovaný úkol").click(force=True)
         expect(page.locator(".hero-title")).to_contain_text("E2E plánovaný úkol")
         page.locator('[data-task-action="create_calendar_event"]').click()
         expect(page.locator(".message-dialog-text")).to_contain_text("Dashboard plán už je vidět automaticky.")

@@ -66,3 +66,28 @@ class CalendarService:
 
     def list_events(self) -> Sequence[CalendarEventModel]:
         return crud.list_calendar_events(self.config)
+
+    def sync_existing_event(self, event_id: int) -> CalendarEventModel | None:
+        event = crud.get_calendar_event(self.config, event_id)
+        if event is None:
+            return None
+
+        external_event_id = self.client.create_event(
+            title=event.title,
+            starts_at=event.starts_at,
+            ends_at=event.ends_at,
+            description=event.description,
+            location=event.location,
+            attendee_emails=event.attendee_emails,
+        )
+        if not external_event_id:
+            return event
+
+        crud.update_calendar_event_sync(
+            self.config,
+            event_id,
+            status="scheduled",
+            calendar_id=self.config.google_calendar_id,
+            external_event_id=external_event_id,
+        )
+        return crud.get_calendar_event(self.config, event_id)
