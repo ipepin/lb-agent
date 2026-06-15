@@ -3,12 +3,27 @@ param(
   [string]$User = "blaze",
   [string]$KeyPath = "$env:USERPROFILE\.ssh\google_compute_engine",
   [string]$RepoDir = "/opt/lb-agent",
-  [string]$Branch = "main"
+  [string]$Branch = "main",
+  [switch]$EnableWorker
 )
 
 $ErrorActionPreference = "Stop"
 
 $target = "$User@$HostName"
+$workerCommands = if ($EnableWorker) {
+  @"
+sudo systemctl enable lb-agent-worker >/dev/null
+sudo systemctl restart lb-agent-worker
+sleep 3
+systemctl is-active lb-agent-worker
+"@
+} else {
+  @"
+sudo systemctl disable --now lb-agent-worker >/dev/null 2>&1 || true
+echo "lb-agent-worker disabled; run deploy_vm.ps1 -EnableWorker after Gmail OAuth is valid."
+"@
+}
+
 $remote = @"
 set -euo pipefail
 cd "$RepoDir"
@@ -23,13 +38,11 @@ sudo cp deploy/systemd/lb-agent-web.service /etc/systemd/system/lb-agent-web.ser
 sudo cp deploy/systemd/lb-agent-worker.service /etc/systemd/system/lb-agent-worker.service
 sudo systemctl daemon-reload
 sudo systemctl enable lb-agent-web >/dev/null
-sudo systemctl enable lb-agent-worker >/dev/null
 sudo systemctl restart lb-agent-web
-sudo systemctl restart lb-agent-worker
 sleep 3
 systemctl is-active lb-agent-web
-systemctl is-active lb-agent-worker
 curl -fsS http://127.0.0.1:8000/api/health
+$workerCommands
 "@
 
 ssh -i $KeyPath -o BatchMode=yes $target $remote

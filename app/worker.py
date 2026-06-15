@@ -23,14 +23,20 @@ def run_worker(once: bool = False, config: AppConfig | None = None) -> None:
     agent_service = AgentService(active_config)
 
     while True:
-        result = agent_service.run_cycle()
-        logger.info(
-            "Agent cycle completed | emails=%s approvals=%s due_reminders=%s notifications=%s",
-            result.checked_emails,
-            result.pending_approvals,
-            result.due_reminders,
-            result.notifications_sent,
-        )
+        try:
+            result = agent_service.run_cycle()
+        except Exception:
+            logger.exception("Agent cycle failed.")
+            if once:
+                raise
+        else:
+            logger.info(
+                "Agent cycle completed | emails=%s approvals=%s due_reminders=%s notifications=%s",
+                result.checked_emails,
+                result.pending_approvals,
+                result.due_reminders,
+                result.notifications_sent,
+            )
 
         if once:
             return
