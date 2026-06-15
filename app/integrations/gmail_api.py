@@ -10,7 +10,11 @@ from app.config import AppConfig
 from app.schemas.entities import Email
 from app.utils.dates import utc_now_iso
 from app.utils.file_utils import ensure_directory, sanitize_filename
+from app.utils.logger import get_logger
 from app.utils.text_utils import cleanup_email_text, html_to_text
+
+
+logger = get_logger(__name__)
 
 
 class GmailApiClient:
@@ -122,9 +126,17 @@ class GmailApiClient:
             return creds
 
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            self._save_token(creds)
-            return creds
+            try:
+                creds.refresh(Request())
+            except Exception as exc:
+                if not interactive:
+                    raise
+                logger.warning("Stored Gmail OAuth token is invalid, starting a new login: %s", exc)
+                creds = None
+                self._delete_token()
+            else:
+                self._save_token(creds)
+                return creds
 
         if not interactive:
             return None
@@ -140,6 +152,10 @@ class GmailApiClient:
         creds = flow.run_local_server(port=0)
         self._save_token(creds)
         return creds
+
+    def _delete_token(self) -> None:
+        if self.config.gmail_token_path.exists():
+            self.config.gmail_token_path.unlink()
 
     def _save_token(self, creds: object) -> None:
         ensure_directory(self.config.gmail_token_path.parent)
