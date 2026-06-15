@@ -216,6 +216,7 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     attendee_emails_json TEXT NOT NULL DEFAULT '[]',
     calendar_id TEXT NOT NULL DEFAULT '',
     external_event_id TEXT NOT NULL DEFAULT '',
+    external_event_url TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
 """
@@ -464,6 +465,12 @@ def initialize_database(config: AppConfig) -> None:
             connection,
             "calendar_events",
             "external_event_id",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        _ensure_column(
+            connection,
+            "calendar_events",
+            "external_event_url",
             "TEXT NOT NULL DEFAULT ''",
         )
         _ensure_column(

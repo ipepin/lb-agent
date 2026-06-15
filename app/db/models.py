@@ -184,6 +184,7 @@ class CalendarEventModel:
     attendee_emails: list[str]
     calendar_id: str
     external_event_id: str
+    external_event_url: str
     created_at: str
 
 

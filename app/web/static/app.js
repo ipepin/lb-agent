@@ -1580,6 +1580,9 @@ function renderTaskDetail(task) {
       <div class="toolbar">
         <button type="button" class="button button-primary" data-task-action="complete" data-task-id="${task.id}">DokonÄŤit</button>
         <button type="button" class="button button-secondary" data-task-action="create_calendar_event" data-task-id="${task.id}">${escapeHtml(getTaskGoogleActionLabel(latestCalendarEvent))}</button>
+        ${latestCalendarEvent?.external_event_url ? `<a class="button button-secondary" href="${escapeHtml(latestCalendarEvent.external_event_url)}" target="_blank" rel="noreferrer">Otevřít v Google kalendáři</a>` : ""}
+        ${latestCalendarEvent?.external_event_id ? `<button type="button" class="button button-secondary" data-task-action="sync_google_calendar_event" data-task-id="${task.id}">Synchronizovat změny</button>` : ""}
+        ${latestCalendarEvent?.external_event_id ? `<button type="button" class="button button-danger" data-task-action="remove_google_calendar_event" data-task-id="${task.id}">Odebrat z Google</button>` : ""}
         <button type="button" class="button button-secondary" data-task-email="${task.id}">Poslat e-mailem</button>
         <button type="submit" form="task-update-form" class="button button-primary">Uložit změny</button>
         <button type="button" class="button button-danger" data-task-action="archive" data-task-id="${task.id}">Archivovat</button>
@@ -3568,6 +3571,18 @@ async function performTaskAction(taskId, action, projectId = null) {
       return;
     }
     showMessage("error", "Dashboard plán už je vidět automaticky. Export do Google Kalendáře se nepodařil, zkontroluj GOOGLE_CALENDAR_ID a OAuth.");
+    return;
+  }
+  if (action === "sync_google_calendar_event") {
+    if (result.synced_to_google) {
+      showMessage("ok", "Google Kalendář byl synchronizován s aktuálním termínem úkolu.");
+      return;
+    }
+    showMessage("error", "Synchronizace do Google Kalendáře se nepodařila.");
+    return;
+  }
+  if (action === "remove_google_calendar_event") {
+    showMessage("ok", "Google událost byla odebrána. Dashboard plán zůstal zachovaný.");
     return;
   }
   showMessage("ok", "Akce nad Ăşkolem byla provedena.");

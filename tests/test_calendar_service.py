@@ -29,7 +29,7 @@ class FakeCalendarClient:
         location: str = "",
         priority: str = "normal",
         attendee_emails: list[str] | None = None,
-    ) -> str | None:
+    ) -> dict[str, str] | None:
         self.created_events.append(
             {
                 "title": title,
@@ -41,7 +41,13 @@ class FakeCalendarClient:
                 "attendee_emails": attendee_emails or [],
             }
         )
-        return "gcal-event-1"
+        return {"id": "gcal-event-1", "html_link": "https://calendar.google.com/event?eid=test"}
+
+    def update_event(self, **kwargs: object) -> dict[str, str] | None:
+        return {"id": "gcal-event-1", "html_link": "https://calendar.google.com/event?eid=test"}
+
+    def delete_event(self, **kwargs: object) -> bool:
+        return True
 
 
 class TestCalendarService(unittest.TestCase):
@@ -120,7 +126,15 @@ class TestCalendarService(unittest.TestCase):
             ),
         )
 
-        stored_event = service.sync_existing_event(event_id)
+        stored_event = service.sync_existing_event(
+            event_id,
+            title="Lokální plán",
+            starts_at="2026-04-21T08:00:00+02:00",
+            ends_at="2026-04-21T10:00:00+02:00",
+            description="Pouze dashboard",
+            location="Brno",
+            attendee_emails=["technik@example.com"],
+        )
 
         self.assertIsNotNone(stored_event)
         assert stored_event is not None

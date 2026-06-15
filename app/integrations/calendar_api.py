@@ -45,7 +45,7 @@ class CalendarApiClient:
         location: str = "",
         priority: str = "normal",
         attendee_emails: list[str] | None = None,
-    ) -> str | None:
+    ) -> dict[str, str] | None:
         if not self.config.google_calendar_id:
             return None
 
@@ -53,7 +53,120 @@ class CalendarApiClient:
         if service is None:
             return None
 
-        event_body = {
+        event_body = self._build_event_body(
+            title=title,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            description=description,
+            location=location,
+            priority=priority,
+            attendee_emails=attendee_emails,
+        )
+        normalized_attendees = event_body.pop("_normalized_attendees")
+        try:
+            created_event = (
+                service.events()
+                .insert(
+                    calendarId=self.config.google_calendar_id,
+                    body=event_body,
+                    sendUpdates="all" if normalized_attendees else "none",
+                )
+                .execute()
+            )
+            return self._extract_event_response(created_event)
+        except HttpError as error:
+            logger.warning("Google Calendar zapis selhal: %s", error)
+            return None
+        except Exception as error:  # pragma: no cover - runtime safety
+            logger.exception("Neocekavana chyba pri zapisu do Google Kalendare: %s", error)
+            return None
+
+    def update_event(
+        self,
+        *,
+        event_id: str,
+        title: str,
+        starts_at: str,
+        ends_at: str,
+        description: str = "",
+        location: str = "",
+        priority: str = "normal",
+        attendee_emails: list[str] | None = None,
+    ) -> dict[str, str] | None:
+        if not self.config.google_calendar_id or not event_id:
+            return None
+
+        service = self._build_service(interactive=False)
+        if service is None:
+            return None
+
+        event_body = self._build_event_body(
+            title=title,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            description=description,
+            location=location,
+            priority=priority,
+            attendee_emails=attendee_emails,
+        )
+        normalized_attendees = event_body.pop("_normalized_attendees")
+        try:
+            updated_event = (
+                service.events()
+                .update(
+                    calendarId=self.config.google_calendar_id,
+                    eventId=event_id,
+                    body=event_body,
+                    sendUpdates="all" if normalized_attendees else "none",
+                )
+                .execute()
+            )
+            return self._extract_event_response(updated_event, fallback_event_id=event_id)
+        except HttpError as error:
+            logger.warning("Google Calendar update selhal: %s", error)
+            return None
+        except Exception as error:  # pragma: no cover - runtime safety
+            logger.exception("Neocekavana chyba pri update Google Kalendare: %s", error)
+            return None
+
+    def delete_event(self, *, event_id: str) -> bool:
+        if not self.config.google_calendar_id or not event_id:
+            return False
+
+        service = self._build_service(interactive=False)
+        if service is None:
+            return False
+
+        try:
+            (
+                service.events()
+                .delete(
+                    calendarId=self.config.google_calendar_id,
+                    eventId=event_id,
+                    sendUpdates="all",
+                )
+                .execute()
+            )
+            return True
+        except HttpError as error:
+            logger.warning("Google Calendar smazani selhalo: %s", error)
+            return False
+        except Exception as error:  # pragma: no cover - runtime safety
+            logger.exception("Neocekavana chyba pri mazani z Google Kalendare: %s", error)
+            return False
+
+    def _build_event_body(
+        self,
+        *,
+        title: str,
+        starts_at: str,
+        ends_at: str,
+        description: str,
+        location: str,
+        priority: str,
+        attendee_emails: list[str] | None,
+    ) -> dict[str, object]:
+        event_body: dict[str, object] = {
             "summary": title,
             "description": description,
             "location": location,
@@ -76,23 +189,26 @@ class CalendarApiClient:
         ]
         if normalized_attendees:
             event_body["attendees"] = normalized_attendees
-        try:
-            created_event = (
-                service.events()
-                .insert(
-                    calendarId=self.config.google_calendar_id,
-                    body=event_body,
-                    sendUpdates="all" if normalized_attendees else "none",
-                )
-                .execute()
-            )
-            return str(created_event.get("id") or "")
-        except HttpError as error:
-            logger.warning("Google Calendar zápis selhal: %s", error)
+        event_body["_normalized_attendees"] = normalized_attendees
+        return event_body
+
+    def _extract_event_response(
+        self,
+        payload: object,
+        *,
+        fallback_event_id: str = "",
+    ) -> dict[str, str] | None:
+        if not isinstance(payload, dict):
+            if fallback_event_id:
+                return {"id": fallback_event_id, "html_link": ""}
             return None
-        except Exception as error:  # pragma: no cover - runtime safety
-            logger.exception("Neočekávaná chyba při zápisu do Google Kalendáře: %s", error)
+        event_id = str(payload.get("id") or fallback_event_id or "")
+        if not event_id:
             return None
+        return {
+            "id": event_id,
+            "html_link": str(payload.get("htmlLink") or ""),
+        }
 
     def _build_service(self, *, interactive: bool) -> object | None:
         if build is None:

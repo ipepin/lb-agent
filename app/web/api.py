@@ -507,6 +507,7 @@ def _serialize_task(config: AppConfig, item: Any) -> dict[str, Any]:
             "status": event.status,
             "calendar_id": event.calendar_id,
             "external_event_id": event.external_event_id,
+            "external_event_url": event.external_event_url,
             "attendee_emails": list(event.attendee_emails),
             "created_at": event.created_at,
         }
@@ -1449,9 +1450,17 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 None,
             )
             if existing_event is not None:
-                if not existing_event.external_event_id:
-                    synced_event = calendar_service.sync_existing_event(existing_event.id)
-                    existing_event = synced_event or existing_event
+                synced_event = calendar_service.update_existing_event(
+                    existing_event.id,
+                    title=event_title,
+                    starts_at=starts_at,
+                    ends_at=ends_at,
+                    description=task.description,
+                    location=project.address if project is not None else "",
+                    priority=task.priority,
+                    attendee_emails=attendee_emails,
+                )
+                existing_event = synced_event or existing_event
                 crud.update_task_status(active_config, task_id, "scheduled")
                 return {
                     "status": "ok",
@@ -1460,6 +1469,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                     "synced_to_google": bool(existing_event.external_event_id),
                     "calendar_id": existing_event.calendar_id,
                     "external_event_id": existing_event.external_event_id,
+                    "external_event_url": existing_event.external_event_url,
                     "invited_workers": len(existing_event.attendee_emails or attendee_emails),
                 }
             event_id = calendar_service.create_event_proposal(
@@ -1485,7 +1495,86 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 "synced_to_google": synced_to_google,
                 "calendar_id": stored_event.calendar_id if stored_event else "",
                 "external_event_id": stored_event.external_event_id if stored_event else "",
+                "external_event_url": stored_event.external_event_url if stored_event else "",
                 "invited_workers": len(attendee_emails),
+            }
+
+        if payload.action == "sync_google_calendar_event":
+            latest_event = next(
+                (
+                    item for item in reversed(crud.list_calendar_events(active_config))
+                    if item.task_id == task_id
+                ),
+                None,
+            )
+            if latest_event is None:
+                raise HTTPException(status_code=404, detail="Úkol zatím nemá lokální kalendářovou událost.")
+            project = (
+                project_service.get_project(task.project_id)
+                if task.project_id is not None
+                else None
+            )
+            starts_at, ends_at = _resolve_task_event_window(task)
+            worker_ids = list(
+                dict.fromkeys(
+                    (task.worker_ids or [])
+                    + ([task.assigned_worker_id] if task.assigned_worker_id is not None else [])
+                )
+            )
+            attendee_emails: list[str] = []
+            for worker_id in worker_ids:
+                worker = crud.get_worker(active_config, int(worker_id))
+                if worker is None or not worker.email:
+                    continue
+                normalized_email = worker.email.strip()
+                if normalized_email and normalized_email not in attendee_emails:
+                    attendee_emails.append(normalized_email)
+            event_title = f"{project.name} – {task.title}" if project is not None else task.title
+            updated_event = calendar_service.update_existing_event(
+                latest_event.id,
+                title=event_title,
+                starts_at=starts_at,
+                ends_at=ends_at,
+                description=task.description,
+                location=project.address if project is not None else "",
+                priority=task.priority,
+                attendee_emails=attendee_emails,
+            )
+            if updated_event is None:
+                raise HTTPException(status_code=404, detail="Kalendářová událost nebyla nalezena.")
+            return {
+                "status": "ok",
+                "action": payload.action,
+                "created_event_id": updated_event.id,
+                "synced_to_google": bool(updated_event.external_event_id),
+                "calendar_id": updated_event.calendar_id,
+                "external_event_id": updated_event.external_event_id,
+                "external_event_url": updated_event.external_event_url,
+                "invited_workers": len(updated_event.attendee_emails),
+            }
+
+        if payload.action == "remove_google_calendar_event":
+            latest_event = next(
+                (
+                    item for item in reversed(crud.list_calendar_events(active_config))
+                    if item.task_id == task_id
+                ),
+                None,
+            )
+            if latest_event is None:
+                raise HTTPException(status_code=404, detail="Úkol zatím nemá kalendářovou událost.")
+            updated_event = calendar_service.remove_external_event(latest_event.id)
+            if updated_event is None:
+                raise HTTPException(status_code=404, detail="Kalendářová událost nebyla nalezena.")
+            return {
+                "status": "ok",
+                "action": payload.action,
+                "created_event_id": updated_event.id,
+                "synced_to_google": False,
+                "calendar_id": "",
+                "external_event_id": "",
+                "external_event_url": "",
+                "invited_workers": len(updated_event.attendee_emails),
             }
 
         raise HTTPException(status_code=400, detail="Neznámá akce pro úkol.")

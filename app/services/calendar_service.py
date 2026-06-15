@@ -38,7 +38,7 @@ class CalendarService:
         assigned_worker_id: int | None = None,
         attendee_emails: list[str] | None = None,
     ) -> int:
-        external_event_id = self.client.create_event(
+        external_event = self.client.create_event(
             title=title,
             starts_at=starts_at,
             ends_at=ends_at,
@@ -47,6 +47,7 @@ class CalendarService:
             priority=priority,
             attendee_emails=attendee_emails,
         )
+        external_event_id, external_event_url = self._extract_external_event_data(external_event)
         event = CalendarEvent(
             title=title,
             starts_at=starts_at,
@@ -61,27 +62,51 @@ class CalendarService:
             attendee_emails=attendee_emails or [],
             calendar_id=self.config.google_calendar_id if external_event_id else "",
             external_event_id=external_event_id or "",
+            external_event_url=external_event_url,
         )
         return crud.create_calendar_event(self.config, event)
 
     def list_events(self) -> Sequence[CalendarEventModel]:
         return crud.list_calendar_events(self.config)
 
-    def sync_existing_event(self, event_id: int) -> CalendarEventModel | None:
+    def sync_existing_event(
+        self,
+        event_id: int,
+        *,
+        title: str,
+        starts_at: str,
+        ends_at: str,
+        description: str = "",
+        location: str = "",
+        priority: str = "normal",
+        attendee_emails: list[str] | None = None,
+    ) -> CalendarEventModel | None:
         event = crud.get_calendar_event(self.config, event_id)
         if event is None:
             return None
 
-        external_event_id = self.client.create_event(
-            title=event.title,
-            starts_at=event.starts_at,
-            ends_at=event.ends_at,
-            description=event.description,
-            location=event.location,
-            attendee_emails=event.attendee_emails,
+        crud.update_calendar_event_details(
+            self.config,
+            event_id,
+            title=title,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            description=description,
+            location=location,
+            attendee_emails=attendee_emails or [],
         )
+        external_event = self.client.create_event(
+            title=title,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            description=description,
+            location=location,
+            priority=priority,
+            attendee_emails=attendee_emails,
+        )
+        external_event_id, external_event_url = self._extract_external_event_data(external_event)
         if not external_event_id:
-            return event
+            return crud.get_calendar_event(self.config, event_id)
 
         crud.update_calendar_event_sync(
             self.config,
@@ -89,5 +114,101 @@ class CalendarService:
             status="scheduled",
             calendar_id=self.config.google_calendar_id,
             external_event_id=external_event_id,
+            external_event_url=external_event_url,
         )
         return crud.get_calendar_event(self.config, event_id)
+
+    def update_existing_event(
+        self,
+        event_id: int,
+        *,
+        title: str,
+        starts_at: str,
+        ends_at: str,
+        description: str = "",
+        location: str = "",
+        priority: str = "normal",
+        attendee_emails: list[str] | None = None,
+    ) -> CalendarEventModel | None:
+        event = crud.get_calendar_event(self.config, event_id)
+        if event is None:
+            return None
+
+        crud.update_calendar_event_details(
+            self.config,
+            event_id,
+            title=title,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            description=description,
+            location=location,
+            attendee_emails=attendee_emails or [],
+        )
+        if not event.external_event_id:
+            return self.sync_existing_event(
+                event_id,
+                title=title,
+                starts_at=starts_at,
+                ends_at=ends_at,
+                description=description,
+                location=location,
+                priority=priority,
+                attendee_emails=attendee_emails,
+            )
+
+        external_event = self.client.update_event(
+            event_id=event.external_event_id,
+            title=title,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            description=description,
+            location=location,
+            priority=priority,
+            attendee_emails=attendee_emails,
+        )
+        external_event_id, external_event_url = self._extract_external_event_data(
+            external_event,
+            fallback_event_id=event.external_event_id,
+        )
+        if external_event_id:
+            crud.update_calendar_event_sync(
+                self.config,
+                event_id,
+                status="scheduled",
+                calendar_id=self.config.google_calendar_id,
+                external_event_id=external_event_id,
+                external_event_url=external_event_url,
+            )
+        return crud.get_calendar_event(self.config, event_id)
+
+    def remove_external_event(self, event_id: int) -> CalendarEventModel | None:
+        event = crud.get_calendar_event(self.config, event_id)
+        if event is None:
+            return None
+
+        if event.external_event_id:
+            self.client.delete_event(event_id=event.external_event_id)
+        crud.update_calendar_event_sync(
+            self.config,
+            event_id,
+            status="proposed",
+            calendar_id="",
+            external_event_id="",
+            external_event_url="",
+        )
+        return crud.get_calendar_event(self.config, event_id)
+
+    def _extract_external_event_data(
+        self,
+        payload: object,
+        *,
+        fallback_event_id: str = "",
+    ) -> tuple[str, str]:
+        if isinstance(payload, dict):
+            return (
+                str(payload.get("id") or fallback_event_id or ""),
+                str(payload.get("html_link") or ""),
+            )
+        if isinstance(payload, str):
+            return payload, ""
+        return fallback_event_id, ""

@@ -890,9 +890,9 @@ def create_calendar_event(config: AppConfig, event: CalendarEvent) -> int:
             INSERT INTO calendar_events (
                 title, starts_at, ends_at, description, location, status,
                 source_email_id, task_id, project_id, assigned_worker_id, attendee_emails_json,
-                calendar_id, external_event_id, created_at
+                calendar_id, external_event_id, external_event_url, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event.title,
@@ -908,6 +908,7 @@ def create_calendar_event(config: AppConfig, event: CalendarEvent) -> int:
                 json.dumps(event.attendee_emails, ensure_ascii=True),
                 event.calendar_id,
                 event.external_event_id,
+                event.external_event_url,
                 utc_now_iso(),
             ),
         )
@@ -921,7 +922,7 @@ def list_calendar_events(config: AppConfig) -> Sequence[CalendarEventModel]:
             """
             SELECT id, title, starts_at, ends_at, description, location, status,
                    source_email_id, task_id, project_id, assigned_worker_id, attendee_emails_json,
-                   calendar_id, external_event_id, created_at
+                   calendar_id, external_event_id, external_event_url, created_at
             FROM calendar_events
             ORDER BY starts_at ASC
             """
@@ -943,6 +944,7 @@ def list_calendar_events(config: AppConfig) -> Sequence[CalendarEventModel]:
             attendee_emails=json.loads(row["attendee_emails_json"] or "[]"),
             calendar_id=row["calendar_id"],
             external_event_id=row["external_event_id"],
+            external_event_url=row["external_event_url"],
             created_at=row["created_at"],
         )
         for row in rows
@@ -955,7 +957,7 @@ def get_calendar_event(config: AppConfig, event_id: int) -> CalendarEventModel |
             """
             SELECT id, title, starts_at, ends_at, description, location, status,
                    source_email_id, task_id, project_id, assigned_worker_id, attendee_emails_json,
-                   calendar_id, external_event_id, created_at
+                   calendar_id, external_event_id, external_event_url, created_at
             FROM calendar_events
             WHERE id = ?
             """,
@@ -980,6 +982,7 @@ def get_calendar_event(config: AppConfig, event_id: int) -> CalendarEventModel |
         attendee_emails=json.loads(row["attendee_emails_json"] or "[]"),
         calendar_id=row["calendar_id"],
         external_event_id=row["external_event_id"],
+        external_event_url=row["external_event_url"],
         created_at=row["created_at"],
     )
 
@@ -991,15 +994,48 @@ def update_calendar_event_sync(
     status: str,
     calendar_id: str,
     external_event_id: str,
+    external_event_url: str,
 ) -> bool:
     with get_connection(config.db_path) as connection:
         cursor = connection.execute(
             """
             UPDATE calendar_events
-            SET status = ?, calendar_id = ?, external_event_id = ?
+            SET status = ?, calendar_id = ?, external_event_id = ?, external_event_url = ?
             WHERE id = ?
             """,
-            (status, calendar_id, external_event_id, event_id),
+            (status, calendar_id, external_event_id, external_event_url, event_id),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+
+
+def update_calendar_event_details(
+    config: AppConfig,
+    event_id: int,
+    *,
+    title: str,
+    starts_at: str,
+    ends_at: str,
+    description: str,
+    location: str,
+    attendee_emails: list[str],
+) -> bool:
+    with get_connection(config.db_path) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE calendar_events
+            SET title = ?, starts_at = ?, ends_at = ?, description = ?, location = ?, attendee_emails_json = ?
+            WHERE id = ?
+            """,
+            (
+                title,
+                starts_at,
+                ends_at,
+                description,
+                location,
+                json.dumps(attendee_emails, ensure_ascii=True),
+                event_id,
+            ),
         )
         connection.commit()
         return cursor.rowcount > 0

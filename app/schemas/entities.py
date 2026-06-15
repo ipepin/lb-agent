@@ -81,6 +81,7 @@ class CalendarEvent:
     attendee_emails: list[str] = field(default_factory=list)
     calendar_id: str = ""
     external_event_id: str = ""
+    external_event_url: str = ""
 
 
 @dataclass(slots=True)
