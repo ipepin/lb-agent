@@ -589,6 +589,39 @@ function getVisibleNavItems() {
   return NAV_ITEMS.filter(([key]) => allowedViews.has(key));
 }
 
+function normalizeActiveViewForRole(role) {
+  const allowedViews = ROLE_VIEWS[role] || [];
+  if (role === "worker") {
+    state.activeView = "workerPortal";
+    return;
+  }
+  if (!allowedViews.includes(state.activeView)) {
+    state.activeView = allowedViews[0] || "dashboard";
+  }
+}
+
+function getRequiredDataKeys(role, view) {
+  const keys = new Set(["dashboard"]);
+  const add = (...items) => items.forEach((item) => keys.add(item));
+
+  if (view === "dashboard") add("tasks", "projects", "workers", "worklogs");
+  if (view === "inbox") add("inbox", "projects", "workers");
+  if (view === "conversations") add("conversations", "projects");
+  if (view === "emails") add("emails", "projects");
+  if (view === "projects") add("projects", "workers", "projectWorkerRates", "worklogs");
+  if (view === "tasks") add("tasks", "projects", "workers");
+  if (view === "users") add("users", "workers");
+  if (view === "workers") add("workers", "worklogSummary");
+  if (view === "worklogs") add("projects", "workers", "worklogs", "worklogSummary", "projectWorkerRates");
+  if (view === "workerPortal") add("tasks", "projects", "workers", "projectWorkerRates", "worklogs", "worklogSummary");
+  if (view === "archive") add("archive", "projects", "workers");
+
+  if (role === "owner" && view === "invoices") add("invoices");
+  if (role === "admin" && view === "invoices") add("invoices");
+
+  return keys;
+}
+
 function getCounts() {
   const dashboardCounts = state.dashboard?.counts || {};
   return {
@@ -3036,44 +3069,43 @@ async function loadCurrentUser() {
 async function loadAll() {
   await loadCurrentUser();
   const role = getCurrentRole();
-  const requests = {
-    dashboard: fetchJson("/api/dashboard"),
-    tasks: fetchJson("/api/tasks"),
-    projects: fetchJson("/api/projects"),
-    workers: fetchJson("/api/workers"),
-    projectWorkerRates: fetchJson("/api/project-worker-rates"),
-    worklogs: fetchJson("/api/worklogs"),
-    worklogSummary: fetchJson("/api/worklogs/summary"),
+  normalizeActiveViewForRole(role);
+
+  const loaders = {
+    dashboard: () => fetchJson("/api/dashboard"),
+    tasks: () => fetchJson("/api/tasks"),
+    projects: () => fetchJson("/api/projects"),
+    workers: () => fetchJson("/api/workers"),
+    projectWorkerRates: () => fetchJson("/api/project-worker-rates"),
+    worklogs: () => fetchJson("/api/worklogs"),
+    worklogSummary: () => fetchJson("/api/worklogs/summary"),
+    users: () => fetchJson("/api/users"),
+    inbox: () => fetchJson("/api/inbox/unprocessed"),
+    archive: () => fetchJson("/api/archive"),
+    conversations: () => fetchJson("/api/conversations"),
+    emails: () => fetchJson("/api/emails"),
+    invoices: () => fetchJson("/api/invoices"),
   };
-  if (role === "owner") {
-    requests.users = fetchJson("/api/users");
-    requests.inbox = fetchJson("/api/inbox/unprocessed");
-    requests.archive = fetchJson("/api/archive");
-    requests.conversations = fetchJson("/api/conversations");
-    requests.emails = fetchJson("/api/emails");
-    requests.invoices = fetchJson("/api/invoices");
-  } else if (role === "admin") {
-    requests.invoices = fetchJson("/api/invoices");
-  }
+  const requestedKeys = getRequiredDataKeys(role, state.activeView);
 
   const results = await Promise.all(
-    Object.entries(requests).map(async ([key, promise]) => [key, await promise]),
+    [...requestedKeys].map(async (key) => [key, await loaders[key]()]),
   );
   const resolved = Object.fromEntries(results);
 
-  state.dashboard = resolved.dashboard || null;
-  state.inbox = resolved.inbox || { emails: [], tasks: [] };
-  state.archive = resolved.archive || { emails: [], tasks: [] };
-  state.conversations = resolved.conversations?.items || [];
-  state.emails = resolved.emails?.items || [];
-  state.tasks = resolved.tasks?.items || [];
-  state.users = resolved.users?.items || [];
-  state.projects = resolved.projects?.items || [];
-  state.invoices = resolved.invoices?.items || [];
-  state.workers = resolved.workers?.items || [];
-  state.projectWorkerRates = resolved.projectWorkerRates?.items || [];
-  state.worklogs = resolved.worklogs?.items || [];
-  state.worklogSummary = resolved.worklogSummary?.items || [];
+  if ("dashboard" in resolved) state.dashboard = resolved.dashboard || null;
+  if ("inbox" in resolved) state.inbox = resolved.inbox || { emails: [], tasks: [] };
+  if ("archive" in resolved) state.archive = resolved.archive || { emails: [], tasks: [] };
+  if ("conversations" in resolved) state.conversations = resolved.conversations?.items || [];
+  if ("emails" in resolved) state.emails = resolved.emails?.items || [];
+  if ("tasks" in resolved) state.tasks = resolved.tasks?.items || [];
+  if ("users" in resolved) state.users = resolved.users?.items || [];
+  if ("projects" in resolved) state.projects = resolved.projects?.items || [];
+  if ("invoices" in resolved) state.invoices = resolved.invoices?.items || [];
+  if ("workers" in resolved) state.workers = resolved.workers?.items || [];
+  if ("projectWorkerRates" in resolved) state.projectWorkerRates = resolved.projectWorkerRates?.items || [];
+  if ("worklogs" in resolved) state.worklogs = resolved.worklogs?.items || [];
+  if ("worklogSummary" in resolved) state.worklogSummary = resolved.worklogSummary?.items || [];
 
   if (role === "worker" && state.currentUser?.worker_id) {
     state.selectedWorkerId = state.currentUser.worker_id;
@@ -3087,14 +3119,6 @@ async function loadAll() {
   }
   if (!state.calendarMode) {
     state.calendarMode = "month";
-  }
-
-  const allowedViews = ROLE_VIEWS[role] || [];
-  if (!allowedViews.includes(state.activeView)) {
-    state.activeView = allowedViews[0] || "dashboard";
-  }
-  if (role === "worker") {
-    state.activeView = "workerPortal";
   }
 
   if (!state.selectedProjectId || !state.projects.some((item) => item.id === state.selectedProjectId)) {
@@ -3130,7 +3154,18 @@ async function loadAll() {
     state.selectedArchiveKey = archiveItems[0]?.key || null;
   }
 
-  await Promise.all([loadProjectDetail(), loadConversationDetail()]);
+  const detailRequests = [];
+  if (state.activeView === "projects" && state.selectedProjectId) {
+    detailRequests.push(loadProjectDetail());
+  } else if (state.activeView !== "projects") {
+    state.projectDetail = null;
+  }
+  if (state.activeView === "conversations" && state.selectedConversationId) {
+    detailRequests.push(loadConversationDetail());
+  } else if (state.activeView !== "conversations") {
+    state.conversationDetail = null;
+  }
+  await Promise.all(detailRequests);
   renderApp();
 }
 
@@ -3668,6 +3703,7 @@ function bindEvents() {
       if (target.dataset.view) {
         state.activeView = target.dataset.view;
         renderApp();
+        await loadAll();
         return;
       }
       if (target.hasAttribute("data-refresh")) {
