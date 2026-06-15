@@ -1035,7 +1035,21 @@ function getProjectWorkerRateValue(projectId, workerId) {
 function getDashboardCalendarEvents() {
   const eventMap = new Map();
   for (const task of state.tasks || []) {
-    for (const event of task.calendar_events || []) {
+    const explicitEvents = task.calendar_events || [];
+    const syntheticEvents = !explicitEvents.length && getTaskPlannedStart(task)
+      ? [{
+          id: `planned:${task.id}`,
+          title: task.title,
+          starts_at: getTaskPlannedStart(task),
+          ends_at: getTaskPlannedEnd(task) || getTaskPlannedStart(task),
+          status: "planned",
+          external_event_id: "",
+          attendee_emails: [],
+          created_at: task.created_at || "",
+          synthetic: true,
+        }]
+      : [];
+    for (const event of [...explicitEvents, ...syntheticEvents]) {
       const startKey = toDateKey(event.starts_at);
       const endKey = toDateKey(event.ends_at || event.starts_at);
       if (!startKey) continue;
@@ -1058,7 +1072,8 @@ function getDashboardCalendarEvents() {
         attendee_emails: event.attendee_emails || [],
         completed_at: task.completed_at,
         completed_by: task.completed_by || null,
-        created_at: event.created_at || "",
+        created_at: event.created_at || task.created_at || "",
+        synthetic: Boolean(event.synthetic),
       };
       const dedupeKey = [
         task.id,
@@ -1218,7 +1233,7 @@ function renderCalendarAgenda(selectedDateKey) {
           </div>
           <div class="calendar-agenda-row">
             <span><strong>Stav:</strong> ${escapeHtml(getTaskStatusLabel(event.task_status))}</span>
-            <span><strong>Kalendář:</strong> ${escapeHtml(event.external_event_id ? "Google Kalendář" : "Jen lokálně")}</span>
+            <span><strong>Kalendář:</strong> ${escapeHtml(event.external_event_id ? "Google Kalendář" : event.synthetic ? "Dashboard plán" : "Jen lokálně")}</span>
           </div>
           <div class="calendar-agenda-row">
             <span><strong>Zakázka:</strong> ${escapeHtml(event.project_name || "Bez zakázky")}</span>
@@ -1343,17 +1358,17 @@ function renderPlanningFieldRow({ deadlineAt = "", plannedStartAt = "", plannedE
     <div class="row">
       <label>
         <span class="detail-item-label">Deadline</span>
-        <input name="deadline_at" type="datetime-local" value="${escapeHtml(toDateTimeLocal(deadlineAt))}" placeholder="Dokdy musí být hotovo">
+        <input name="deadline_at" type="datetime-local" value="${escapeHtml(toDateTimeLocal(deadlineAt))}" placeholder="Deadline: dokdy musí být hotovo">
       </label>
       <label>
         <span class="detail-item-label">Začátek práce</span>
-        <input name="planned_start_at" type="datetime-local" value="${escapeHtml(toDateTimeLocal(plannedStartAt))}" placeholder="Kdy práce začne">
+        <input name="planned_start_at" type="datetime-local" value="${escapeHtml(toDateTimeLocal(plannedStartAt))}" placeholder="Začátek práce: blok v kalendáři">
       </label>
     </div>
     <div class="row">
       <label>
         <span class="detail-item-label">Konec práce</span>
-        <input name="planned_end_at" type="datetime-local" value="${escapeHtml(toDateTimeLocal(plannedEndAt))}" placeholder="Kdy práce skončí">
+        <input name="planned_end_at" type="datetime-local" value="${escapeHtml(toDateTimeLocal(plannedEndAt))}" placeholder="Konec práce: konec bloku v kalendáři">
       </label>
       <div class="field-note">Když konec nevyplníš, dopočítá se z odhadu hodin nebo se použije 1 hodina.</div>
     </div>
@@ -1542,7 +1557,7 @@ function renderTaskDetail(task) {
       </div>
       <div class="toolbar">
         <button type="button" class="button button-primary" data-task-action="complete" data-task-id="${task.id}">DokonÄŤit</button>
-        <button type="button" class="button button-secondary" data-task-action="create_calendar_event" data-task-id="${task.id}">Do kalendĂˇĹ™e</button>
+        <button type="button" class="button button-secondary" data-task-action="create_calendar_event" data-task-id="${task.id}">Přidat do Google kalendáře</button>
         <button type="button" class="button button-secondary" data-task-email="${task.id}">Poslat e-mailem</button>
         <button type="submit" form="task-update-form" class="button button-primary">Uložit změny</button>
         <button type="button" class="button button-danger" data-task-action="archive" data-task-id="${task.id}">Archivovat</button>
@@ -3529,7 +3544,7 @@ async function performTaskAction(taskId, action, projectId = null) {
       showMessage("ok", "Úkol byl zapsán do Google Kalendáře.");
       return;
     }
-    showMessage("info", "Událost byla zatím uložena jen lokálně. Zkontroluj GOOGLE_CALENDAR_ID a OAuth.");
+    showMessage("error", "Dashboard plán už je vidět automaticky. Export do Google Kalendáře se nepodařil, zkontroluj GOOGLE_CALENDAR_ID a OAuth.");
     return;
   }
   showMessage("ok", "Akce nad Ăşkolem byla provedena.");
